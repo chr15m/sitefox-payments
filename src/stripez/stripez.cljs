@@ -5,7 +5,8 @@
   (:require
     [promesa.core :as p]
     [applied-science.js-interop :as j]
-    ["stripe" :as Stripe]  
+    ["stripe$default" :as Stripe]
+    ["slugify$default" :as slugify]
     [sitefox.util :refer [env-required]]
     [sitefox.web :refer [build-absolute-uri]]))
 
@@ -13,10 +14,17 @@
 
 (defn get-price-info
   "Retrieve price data from the Stripe API e.g. for caching locally or displaying for the user.
-  `price-ids` should be a map consisting of local keys and Stripe price IDs.
-  For example `{:monthly-pro-subscription \"price_1AbCd2EfGhIjKlMNo3PQr4S5\"}`.
-  Returns a map of those keys to [price data]()."
-  [price-ids])
+  `price-ids` should be a list of Stripe price IDs.
+  Returns a map keyed on price nicknames or price IDs if nicknames are missing. Values are the price data."
+  [price-ids]
+  (p/let [price-ids (map name price-ids)
+          prices (p/all (map #(j/call-in stripe [:prices :retrieve] %) price-ids))
+          named-prices (apply merge
+                         (map (fn [price]
+                                {(slugify (or (j/get price :nickname) (j/get price :id)) #js {:lower true})
+                                 price})
+                              prices))]
+    (clj->js named-prices)))
 
 (defn initiate-payment
   "Sends the user to the Stripe payment page to make a one-time payment or initiate a subscription.
