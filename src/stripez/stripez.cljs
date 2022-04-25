@@ -12,6 +12,11 @@
 
 (def stripe (Stripe (env-required "STRIPE_SK")))
 
+(defn make-price-name
+  "Generates a key/name for this price based on the nickname, falling back to the ID."
+  [price]
+  (slugify (or (j/get price :nickname) (j/get price :id)) #js {:lower true}))
+
 (defn get-price-info
   "Retrieve price data from the Stripe API e.g. for caching locally or displaying for the user.
   `price-ids` should be a list of Stripe price IDs.
@@ -20,10 +25,10 @@
   (p/let [price-ids (map name price-ids)
           prices (p/all (map #(j/call-in stripe [:prices :retrieve] %) price-ids))
           named-prices (apply merge
-                         (map (fn [price]
-                                {(slugify (or (j/get price :nickname) (j/get price :id)) #js {:lower true})
-                                 price})
-                              prices))]
+                              (map (fn [price]
+                                     {(make-price-name price)
+                                      price})
+                                   prices))]
     (clj->js named-prices)))
 
 (defn initiate-payment
