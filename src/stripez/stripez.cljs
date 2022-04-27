@@ -8,7 +8,9 @@
     ["stripe$default" :as Stripe]
     ["slugify$default" :as slugify]
     [sitefox.util :refer [env-required]]
-    [sitefox.web :refer [build-absolute-uri]]))
+    [sitefox.web :refer [build-absolute-uri name-route get-named-route]]
+    [sitefox.db :refer [kv]]
+    [sitefox.ui :refer [log]]))
 
 (def stripe (Stripe (env-required "STRIPE_SK")))
 
@@ -22,6 +24,7 @@
   `price-ids` should be a list of Stripe price IDs.
   Returns a map keyed on price nicknames or price IDs if nicknames are missing. Values are the price data."
   [price-ids]
+  (log "Getting price info from the Stripe API.")
   (p/let [price-ids (map name price-ids)
           prices (p/all (map #(j/call-in stripe [:prices :retrieve] %) price-ids))
           named-prices (apply merge
@@ -31,22 +34,94 @@
                                    prices))]
     (clj->js named-prices)))
 
+(defn cached-prices
+  "Retrieve price data from Stripe using get-price-info,
+  or from the cache, and cache it if not yet cached."
+  [price-ids]
+  (p/let [cache (kv "cache")
+          prices (.get cache "prices")
+          prices (or prices (get-price-info price-ids))]
+    (.set cache "prices" prices (* 1000 60 5))
+    prices))
+
 (defn initiate-payment
   "Sends the user to the Stripe payment page to make a one-time payment or initiate a subscription.
   In the background this starts a Stripe session, creating a Stripe customer if the currently logged in user doesn't have one yet,
   and stores the Stripe customer id in the user data as `stripe-customer-id`.
-  Redirects the browser to the payment/subscription page to complete payment."
-  [req price-id])
+  Redirects the browser to the payment/subscription page to complete payment.
+  The request must be for a currently authenticated user for this to work (e.g. req.user has an id)."
+  [req res price success-url cancel-url & [metadata]]
+  (let [user (j/get req :user)
+        user-id (j/get user :id)]
+    (if user-id
+      (p/let [customer-id (j/get-in req [:user :stripe-customer-id])
+              _ (print "customer-id" customer-id)
+              customer-email (j/get-in user [:auth :email])
+              price-id (j/get price :id)
+              price-type (j/get price :type)
+              price-mode (get {"one_time" "payment"
+                               "recurring" "subscription"}
+                              price-type)
+              metadata-key (get {"one_time" :payment_intent_data
+                                 "recurring" :subscription_data}
+                                price-type)
+              metadata (merge metadata
+                              {:user-id user-id
+                               :price-id price-id
+                               :price-name (make-price-name price)})
+              packet {:billing_address_collection "auto"
+                      :line_items [{:price price-id :quantity 1}]
+                      :metadata metadata
+                      :mode price-mode
+                      :success_url (build-absolute-uri req (or success-url "/account"))
+                      :cancel_url (build-absolute-uri req (or cancel-url "/"))}
+              packet (assoc packet
+                            metadata-key
+                            {:metadata metadata})
+              packet (if customer-id (assoc packet :customer customer-id) packet)
+              packet (if customer-email (assoc packet :customer_email customer-email) packet)
+              session (j/call-in stripe [:checkout :sessions :create]
+                                 (clj->js packet))]
+        (j/assoc-in! req [:user :stripe-customer-id] (j/get session :customer-id))
+        (.redirect res 303 (aget session "url")))
+      (.redirect res 303 (build-absolute-uri req (or cancel-url "/"))))))
+
+(defn make-initiate-payment-route
+  "Internal wrapper function to set up Stripe payment routes."
+  [price-ids {:keys [success-url cancel-url metadata]}]
+  (fn [req res]
+    (p/let [prices (cached-prices price-ids)
+            price-id (j/get-in req [:params :price])
+            price (j/get prices price-id)]
+      (initiate-payment req res price success-url cancel-url metadata))))
 
 (defn get-valid-subscription
   "Returns any active subscription the currently logged in user has.
-  `price-ids` are regular Stripe subscriptions."
-  [req price-ids])
+  `prices` are regular Stripe subscriptions."
+  [_customer-id _prices])
+
+(defn get-customer-payments
+  "Returns all of the payments a customer has made. Optionally limited to `since` days ago."
+  [_customer-id _prices])
+
+(defn get-any-valid-plan
+  "Returns any valid subscripton or payment for the current user.
+  For payment based prices you must create a metadata key in the
+  Stripe prices UI called 'validity' with the value specifying the number of minutes:
+
+  ```
+    \"metadata\": {\"validity\": \"1440\"},
+  ```
+  "
+  [customer-id _prices]
+  (when customer-id
+    nil))
 
 (defn send-to-customer-portal
   "Redirects the user to the Stripe customer portal where they can manage their
   subscription status according to the parameters you have set in the Stripe UI.
-  `return-url` is a relative or absolute URL where the user should return to if they cancel/exit."
+  `return-url` is a relative or absolute URL where the user should return to if they cancel/exit.
+  The request must be for a currently authenticated user for this to work (e.g. req.user has an id)."
   [req res & [return-url]]
   (p/let [customer-id (j/get-in req [:user :stripe-customer-id])
           return-url (or return-url "/account")
@@ -58,3 +133,39 @@
                              (clj->js {:customer customer-id
                                        :return_url return-url}))]
     (.redirect res (aget session "url"))))
+
+(defn make-middleware:user-subscription
+  "Express/Sitefox middleware for fetching the user's subscription."
+  [prices]
+  (fn [req _res done]
+    (p/let [customer-id (j/get-in req [:user :stripe-customer-id])
+            subscription (get-any-valid-plan customer-id prices)]
+      (j/assoc! req [:subscription] subscription)
+      (done))))
+
+(defn is-paused [sub]
+  (j/get-in sub [:pause_collection]))
+
+(defn payment-link [req price-id]
+  (-> (get-named-route req "account:start") (.replace ":price" price-id)))
+
+; *** default routes *** ;
+
+(defn component:account
+  "A Reagent component for showing the user their subscription status."
+  [req]
+  (let [subscription (j/get req :subscription)]
+    [:section.account
+     [:div
+      [:h2 "Your subscription"]
+      [:p "Hello. " [:strong "Thank you"] " for your subscription."]
+      [:p "Your current plan is " [:strong (j/get subscription "name")] "."]
+      (when (is-paused subscription)
+        [:p [:strong "Your subscription is currently paused."]])
+      [:h2 "Update subscription"]]
+     [:a.button {:href "/account/portal"} "visit the customer portal"]]))
+
+(defn setup
+  "Set up the routes for redirecting to subscriptions etc."
+  [app price-ids & [options]]
+  (j/call app :get (name-route app "/account/start/:price" "account:start") (make-initiate-payment-route price-ids options)))
