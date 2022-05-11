@@ -9,8 +9,10 @@
     ["slugify$default" :as slugify]
     [sitefox.util :refer [env-required]]
     [sitefox.web :refer [build-absolute-uri name-route get-named-route]]
+    [sitefox.html :refer [direct-to-template]]
     [sitefox.db :refer [kv]]
-    [sitefox.ui :refer [log]]))
+    [sitefox.ui :refer [log]]
+    [sitefox.auth :refer [save-user]]))
 
 (def stripe (Stripe (env-required "STRIPE_SK")))
 
@@ -47,15 +49,14 @@
 (defn initiate-payment
   "Sends the user to the Stripe payment page to make a one-time payment or initiate a subscription.
   In the background this starts a Stripe session, creating a Stripe customer if the currently logged in user doesn't have one yet,
-  and stores the Stripe customer id in the user data as `stripe-customer-id`.
+  and stores the Stripe session reference for later retrieval.
   Redirects the browser to the payment/subscription page to complete payment.
   The request must be for a currently authenticated user for this to work (e.g. req.user has an id)."
   [req res price success-url cancel-url & [metadata]]
   (let [user (j/get req :user)
         user-id (j/get user :id)]
     (if user-id
-      (p/let [customer-id (j/get-in req [:user :stripe-customer-id])
-              _ (print "customer-id" customer-id)
+      (p/let [customer-id (j/get-in user [:stripe :customer-id])
               customer-email (j/get-in user [:auth :email])
               price-id (j/get price :id)
               price-type (j/get price :type)
@@ -81,8 +82,9 @@
               packet (if customer-id (assoc packet :customer customer-id) packet)
               packet (if customer-email (assoc packet :customer_email customer-email) packet)
               session (j/call-in stripe [:checkout :sessions :create]
-                                 (clj->js packet))]
-        (j/assoc-in! req [:user :stripe-customer-id] (j/get session :customer-id))
+                                 (clj->js packet))
+              user (j/update-in! user [:stripe :checkout-session-ids] #(.concat (or % #js []) #js [(j/get session :id)]))
+              _saved (save-user user)]
         (.redirect res 303 (aget session "url")))
       (.redirect res 303 (build-absolute-uri req (or cancel-url "/"))))))
 
@@ -123,7 +125,7 @@
   `return-url` is a relative or absolute URL where the user should return to if they cancel/exit.
   The request must be for a currently authenticated user for this to work (e.g. req.user has an id)."
   [req res & [return-url]]
-  (p/let [customer-id (j/get-in req [:user :stripe-customer-id])
+  (p/let [customer-id (j/get-in req [:user :stripe :customer-id])
           return-url (or return-url "/account")
           return-url (if (= (first return-url) "/")
                        (build-absolute-uri req return-url)
@@ -134,13 +136,32 @@
                                        :return_url return-url}))]
     (.redirect res (aget session "url"))))
 
+(defn get-customer-id [req]
+  (let [customer-id (j/get-in req [:user :stripe :customer-id])
+        session-ids (j/get-in req [:user :stripe :checkout-session-ids])]
+    (or customer-id
+        (when (seq session-ids)
+          (p/let [sessions (p/all (.map session-ids #(j/call-in stripe [:checkout :sessions :retrieve] %)))
+                  customer-ids (when (seq sessions) (remove nil? (map #(j/get % :customer) (reverse sessions))))]
+            (first customer-ids))))))
+
 (defn make-middleware:user-subscription
   "Express/Sitefox middleware for fetching the user's subscription."
-  [prices]
+  [price-ids]
   (fn [req _res done]
-    (p/let [customer-id (j/get-in req [:user :stripe-customer-id])
+    (print "user-id" (j/get-in req [:user :id]))
+    (print "customer-id" (j/get-in req [:user :stripe :customer-id]))
+    (print "sessions" (j/get-in req [:user :stripe :checkout-session-ids]))
+    (p/let [user (j/get req :user)
+            customer-id (get-customer-id req)
+            prices (when customer-id (cached-prices price-ids))
             subscription (get-any-valid-plan customer-id prices)]
-      (j/assoc! req [:subscription] subscription)
+      (print "subscription" subscription)
+      (print "customer-id" customer-id)
+      (j/update-in! user [:stripe] j/assoc!
+                    :subscription subscription
+                    :customer-id customer-id)
+      (save-user user)
       (done))))
 
 (defn is-paused [sub]
@@ -154,18 +175,23 @@
 (defn component:account
   "A Reagent component for showing the user their subscription status."
   [req]
-  (let [subscription (j/get req :subscription)]
+  (let [subscription (j/get-in req [:user :stripe :subscription])]
     [:section.account
      [:div
       [:h2 "Your subscription"]
-      [:p "Hello. " [:strong "Thank you"] " for your subscription."]
-      [:p "Your current plan is " [:strong (j/get subscription "name")] "."]
-      (when (is-paused subscription)
-        [:p [:strong "Your subscription is currently paused."]])
-      [:h2 "Update subscription"]]
-     [:a.button {:href "/account/portal"} "visit the customer portal"]]))
+      (if subscription
+        [:<>
+         [:p "Hello. " [:strong "Thank you"] " for your subscription."]
+         [:p "Your current plan is " [:strong (j/get subscription "name")] "."]
+         (when (is-paused subscription)
+           [:p [:strong "Your subscription is currently paused."]])
+         [:h2 "Update subscription"]
+         [:a.button {:href "/account/portal"} "visit the customer portal"]]
+        [:p "You have no active subscription."])]]))
 
 (defn setup
   "Set up the routes for redirecting to subscriptions etc."
-  [app price-ids & [options]]
-  (j/call app :get (name-route app "/account/start/:price" "account:start") (make-initiate-payment-route price-ids options)))
+  [app price-ids template selector & [options]]
+  (j/call app :use (make-middleware:user-subscription price-ids))
+  (j/call app :get (name-route app "/account/start/:price" "account:start") (make-initiate-payment-route price-ids options))
+  (j/call app :get (name-route app "/account" "account") (fn [req res] (direct-to-template res template selector [component:account req]))))
