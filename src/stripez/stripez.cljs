@@ -26,7 +26,7 @@
   `price-ids` should be a list of Stripe price IDs.
   Returns a map keyed on price nicknames or price IDs if nicknames are missing. Values are the price data."
   [price-ids]
-  (log "Getting price info from the Stripe API.")
+  (log "Refreshing price info from the Stripe API.")
   (p/let [price-ids (map name price-ids)
           prices (p/all (map #(j/call-in stripe [:prices :retrieve] %) price-ids))
           named-prices (apply merge
@@ -97,14 +97,21 @@
             price (j/get prices price-id)]
       (initiate-payment req res price success-url cancel-url metadata))))
 
-(defn get-valid-subscription
+(defn get-valid-subscriptions
   "Returns any active subscription the currently logged in user has.
   `prices` are regular Stripe subscriptions."
-  [_customer-id _prices])
+  [customer-id prices]
+  (p/let [price-ids (map #(j/get % :id) (js/Object.values prices))
+          subscriptions-data (j/call-in stripe [:subscriptions :list] #js {:customer customer-id})
+          subscriptions (.filter (or (j/get subscriptions-data :data) #js [])
+                                 (fn [sub] (contains? (set price-ids) (j/get-in sub [:plan :id]))))]
+    subscriptions))
 
 (defn get-customer-payments
-  "Returns all of the payments a customer has made. Optionally limited to `since` days ago."
-  [_customer-id _prices])
+  "Returns all of the payments a customer has made."
+  [_customer-id _prices]
+  
+  )
 
 (defn get-any-valid-plan
   "Returns any valid subscripton or payment for the current user.
@@ -115,9 +122,23 @@
     \"metadata\": {\"validity\": \"1440\"},
   ```
   "
-  [customer-id _prices]
+  [customer-id prices]
   (when customer-id
-    nil))
+    (log "Refreshing customer subscription from Stripe.")
+    (p/let [valid-subscriptions (get-valid-subscriptions customer-id prices)
+            valid-payments (get-customer-payments customer-id prices)]
+      (or (first valid-payments) (first valid-subscriptions)))))
+
+(defn cached-subscription
+  "Retrieve a customer's subscription from Stripe using get-any-valid-plan,
+  or from the cache, and cache it if not yet cached."
+  [customer-id prices subscription-cache-time]
+  (p/let [cache (kv "cache")
+          k (str "subscription:" customer-id)
+          subscription (.get cache k)
+          subscription (or subscription (get-any-valid-plan customer-id prices))]
+    (.set cache k subscription subscription-cache-time)
+    subscription))
 
 (defn send-to-customer-portal
   "Redirects the user to the Stripe customer portal where they can manage their
@@ -137,31 +158,26 @@
     (.redirect res (aget session "url"))))
 
 (defn get-customer-id [req]
-  (let [customer-id (j/get-in req [:user :stripe :customer-id])
-        session-ids (j/get-in req [:user :stripe :checkout-session-ids])]
+  (let [user (j/get req :user)
+        customer-id (j/get-in user [:stripe :customer-id])
+        session-ids (j/get-in user [:stripe :checkout-session-ids])]
     (or customer-id
         (when (seq session-ids)
           (p/let [sessions (p/all (.map session-ids #(j/call-in stripe [:checkout :sessions :retrieve] %)))
-                  customer-ids (when (seq sessions) (remove nil? (map #(j/get % :customer) (reverse sessions))))]
+                  customer-ids (when (seq sessions) (remove nil? (map #(j/get % :customer) (reverse sessions))))
+                  user (j/update-in! user [:stripe] j/assoc! :customer-id customer-id)]
+            (save-user user)
             (first customer-ids))))))
 
 (defn make-middleware:user-subscription
   "Express/Sitefox middleware for fetching the user's subscription."
-  [price-ids]
+  [price-ids {:keys [subscription-cache-time]}]
   (fn [req _res done]
-    (print "user-id" (j/get-in req [:user :id]))
-    (print "customer-id" (j/get-in req [:user :stripe :customer-id]))
-    (print "sessions" (j/get-in req [:user :stripe :checkout-session-ids]))
     (p/let [user (j/get req :user)
             customer-id (get-customer-id req)
             prices (when customer-id (cached-prices price-ids))
-            subscription (get-any-valid-plan customer-id prices)]
-      (print "subscription" subscription)
-      (print "customer-id" customer-id)
-      (j/update-in! user [:stripe] j/assoc!
-                    :subscription subscription
-                    :customer-id customer-id)
-      (save-user user)
+            subscription (cached-subscription customer-id prices (or subscription-cache-time (* 1000 60 60)))]
+      (j/assoc-in! user [:stripe :subscription] subscription)
       (done))))
 
 (defn is-paused [sub]
@@ -181,8 +197,8 @@
       [:h2 "Your subscription"]
       (if subscription
         [:<>
-         [:p "Hello. " [:strong "Thank you"] " for your subscription."]
-         [:p "Your current plan is " [:strong (j/get subscription "name")] "."]
+         [:p "Thank you for your subscription."]
+         [:p "Your current subscription is " [:strong (j/get-in subscription [:plan :nickname])] "."]
          (when (is-paused subscription)
            [:p [:strong "Your subscription is currently paused."]])
          [:h2 "Update subscription"]
@@ -190,8 +206,13 @@
         [:p "You have no active subscription."])]]))
 
 (defn setup
-  "Set up the routes for redirecting to subscriptions etc."
+  "Set up the routes for redirecting to subscriptions etc.
+   * `price-ids` is a list of price IDs that your users might be subscribed under (including grandfathered prices).
+   * `template` is the HTML string template fragment to render UIs into.
+   * `selector` is the query selector for where to mount UIs in the template.
+   * `options` can include `:success-url`, `:cancel-url`, `:metadata` to pass to Stripe,
+     and `:subscription-cache-time` in ms to cache a user's subscription and not hit the Stripe API on every request."
   [app price-ids template selector & [options]]
-  (j/call app :use (make-middleware:user-subscription price-ids))
+  (j/call app :use (make-middleware:user-subscription price-ids options))
   (j/call app :get (name-route app "/account/start/:price" "account:start") (make-initiate-payment-route price-ids options))
   (j/call app :get (name-route app "/account" "account") (fn [req res] (direct-to-template res template selector [component:account req]))))
