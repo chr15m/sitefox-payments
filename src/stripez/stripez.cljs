@@ -46,6 +46,45 @@
     (.set cache "prices" prices (* 1000 60 5))
     prices))
 
+(defn get-customer-id-from-server [user]
+  (log "get-customer-id-from-server")
+  (p/let [customer-id-stored (j/get-in user [:stripe :customer-id])
+          customer (when customer-id-stored (p/catch (j/call-in stripe [:customers :retrieve] customer-id-stored) (fn [_err] nil)))
+          customer-id (when (and customer-id-stored customer (not (j/get customer :deleted))) (j/get customer :id))]
+    (log "customer-id-stored" customer-id-stored)
+    (log "customer-id" customer-id)
+    (when (and customer-id-stored (not customer-id))
+      (log "Removing invalid/deleted customer-id")
+      (j/update-in! user [:stripe]
+                    (fn [stripe-data]
+                      (js-delete stripe-data "customer-id")
+                      stripe-data))
+      (save-user user))
+    customer-id))
+
+(defn get-customer-id [req]
+  (let [user (j/get req :user)
+        customer-id (j/get-in user [:stripe :customer-id])
+        session-ids (j/get-in user [:stripe :checkout-session-ids])]
+    (log "get-customer-id" customer-id)
+    (or customer-id
+        (when (seq session-ids)
+          (log "session-ids" session-ids)
+          (p/let [sessions (p/all (.map session-ids #(j/call-in stripe [:checkout :sessions :retrieve] %)))
+                  customer-ids (when (seq sessions)
+                                 (->> sessions
+                                      reverse
+                                      (map #(j/get % :customer))
+                                      (remove #(j/get % :deleted))
+                                      (remove nil?)))
+                  _ (log "customer-ids" customer-ids)
+                  customer-id (first customer-ids)
+                  user (j/assoc-in! user [:stripe :customer-id] customer-id)
+                  customer-id (get-customer-id-from-server user)]
+            (log "get-customer-id got:" customer-id)
+            (save-user user)
+            customer-id)))))
+
 (defn initiate-payment
   "Sends the user to the Stripe payment page to make a one-time payment or initiate a subscription.
   In the background this starts a Stripe session, creating a Stripe customer if the currently logged in user doesn't have one yet,
@@ -56,7 +95,7 @@
   (let [user (j/get req :user)
         user-id (j/get user :id)]
     (if user-id
-      (p/let [customer-id (j/get-in user [:stripe :customer-id])
+      (p/let [customer-id (get-customer-id-from-server user)
               customer-email (j/get-in user [:auth :email])
               price-id (j/get price :id)
               price-type (j/get price :type)
@@ -79,12 +118,14 @@
               packet (assoc packet
                             metadata-key
                             {:metadata metadata})
-              packet (if customer-id (assoc packet :customer customer-id) packet)
-              packet (if customer-email (assoc packet :customer_email customer-email) packet)
+              packet (cond customer-id (assoc packet :customer customer-id)
+                           customer-email (assoc packet :customer_email customer-email)
+                           :else packet)
               session (j/call-in stripe [:checkout :sessions :create]
                                  (clj->js packet))
               user (j/update-in! user [:stripe :checkout-session-ids] #(.concat (or % #js []) #js [(j/get session :id)]))
               _saved (save-user user)]
+        (log "sessions" (j/get-in user [:stripe :checkout-session-ids]))
         (.redirect res 303 (aget session "url")))
       (.redirect res 303 (build-absolute-uri req (or cancel-url "/"))))))
 
@@ -114,20 +155,22 @@
   )
 
 (defn get-any-valid-plan
-  "Returns any valid subscripton or payment for the current user.
+  "Returns any valid subscription or payment for the current user.
   For payment based prices you must create a metadata key in the
   Stripe prices UI called 'validity' with the value specifying the number of minutes:
 
   ```
-    \"metadata\": {\"validity\": \"1440\"},
+  \"metadata\": {\"validity\": \"1440\"},
   ```
   "
   [customer-id prices]
   (when customer-id
-    (log "Refreshing customer subscription from Stripe.")
-    (p/let [valid-subscriptions (get-valid-subscriptions customer-id prices)
-            valid-payments (get-customer-payments customer-id prices)]
-      (or (first valid-payments) (first valid-subscriptions)))))
+    (log "Refreshing customer subscription from Stripe: " customer-id)
+    (p/catch
+      (p/let [valid-subscriptions (when customer-id (get-valid-subscriptions customer-id prices))
+              valid-payments (when customer-id (get-customer-payments customer-id prices))]
+        (or (first valid-payments) (first valid-subscriptions)))
+      (fn [err] (log (.toString err)) nil))))
 
 (defn cached-subscription
   "Retrieve a customer's subscription from Stripe using get-any-valid-plan,
@@ -146,7 +189,8 @@
   `return-url` is a relative or absolute URL where the user should return to if they cancel/exit.
   The request must be for a currently authenticated user for this to work (e.g. req.user has an id)."
   [req res & [return-url]]
-  (p/let [customer-id (j/get-in req [:user :stripe :customer-id])
+  (p/let [user (j/get req :user)
+          customer-id (get-customer-id-from-server user)
           return-url (or return-url "/account")
           return-url (if (= (first return-url) "/")
                        (build-absolute-uri req return-url)
@@ -157,27 +201,15 @@
                                        :return_url return-url}))]
     (.redirect res (aget session "url"))))
 
-(defn get-customer-id [req]
-  (let [user (j/get req :user)
-        customer-id (j/get-in user [:stripe :customer-id])
-        session-ids (j/get-in user [:stripe :checkout-session-ids])]
-    (or customer-id
-        (when (seq session-ids)
-          (p/let [sessions (p/all (.map session-ids #(j/call-in stripe [:checkout :sessions :retrieve] %)))
-                  customer-ids (when (seq sessions) (remove nil? (map #(j/get % :customer) (reverse sessions))))
-                  user (j/update-in! user [:stripe] j/assoc! :customer-id customer-id)]
-            (save-user user)
-            (first customer-ids))))))
-
 (defn make-middleware:user-subscription
   "Express/Sitefox middleware for fetching the user's subscription."
   [price-ids {:keys [subscription-cache-time]}]
   (fn [req _res done]
-    (p/let [user (j/get req :user)
-            customer-id (get-customer-id req)
+    (p/let [customer-id (get-customer-id req)
             prices (when customer-id (cached-prices price-ids))
             subscription (cached-subscription customer-id prices (or subscription-cache-time (* 1000 60 60)))]
-      (j/assoc-in! user [:stripe :subscription] subscription)
+      ;(log "stripe" (j/get user :stripe))
+      (j/assoc-in! req [:stripe :subscription] subscription)
       (done))))
 
 (defn is-paused [sub]
@@ -191,7 +223,7 @@
 (defn component:account
   "A Reagent component for showing the user their subscription status."
   [req]
-  (let [subscription (j/get-in req [:user :stripe :subscription])]
+  (let [subscription (j/get-in req [:stripe :subscription])]
     [:section.account
      [:div
       [:h2 "Your subscription"]
@@ -213,6 +245,11 @@
    * `options` can include `:success-url`, `:cancel-url`, `:metadata` to pass to Stripe,
      and `:subscription-cache-time` in ms to cache a user's subscription and not hit the Stripe API on every request."
   [app price-ids template selector & [options]]
+  ;(j/call app :use (fn [req _res done] (j/update-in! req [:user] (fn [user] (js-delete user "stripe") user)) (done)))
   (j/call app :use (make-middleware:user-subscription price-ids options))
   (j/call app :get (name-route app "/account/start/:price" "account:start") (make-initiate-payment-route price-ids options))
-  (j/call app :get (name-route app "/account" "account") (fn [req res] (direct-to-template res template selector [component:account req]))))
+  (j/call app :get (name-route app "/account" "account") (fn [req res]
+                                                           (p/let [user (j/get req :user)
+                                                                   _customer-id (get-customer-id-from-server user)]
+                                                             (log "customer-id" _customer-id)
+                                                             (direct-to-template res template selector [component:account req])))))
