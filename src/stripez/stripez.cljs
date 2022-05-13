@@ -46,44 +46,22 @@
     (.set cache "prices" prices (* 1000 60 5))
     prices))
 
-(defn get-customer-id-from-server [user]
-  (log "get-customer-id-from-server")
-  (p/let [customer-id-stored (j/get-in user [:stripe :customer-id])
-          customer (when customer-id-stored (p/catch (j/call-in stripe [:customers :retrieve] customer-id-stored) (fn [_err] nil)))
-          customer-id (when (and customer-id-stored customer (not (j/get customer :deleted))) (j/get customer :id))]
-    (log "customer-id-stored" customer-id-stored)
-    (log "customer-id" customer-id)
-    (when (and customer-id-stored (not customer-id))
-      (log "Removing invalid/deleted customer-id")
-      (j/update-in! user [:stripe]
-                    (fn [stripe-data]
-                      (js-delete stripe-data "customer-id")
-                      stripe-data))
-      (save-user user))
+(defn create-customer
+  "Create a new Stripe customer using their API and store it in the user's data."
+  [user]
+  (p/let [user-email (j/get-in user [:auth :email])
+          customer (j/call-in stripe [:customers :create] (clj->js {:metadata {:user-id (j/get user :id)}
+                                                                    :email user-email}))
+          customer-id (j/get customer :id)
+          user (j/assoc-in! user [:stripe :customer-id] customer-id)]
+    (log "Created new Stripe customer:" customer-id)
+    (save-user user)
     customer-id))
 
-(defn get-customer-id [req]
-  (let [user (j/get req :user)
-        customer-id (j/get-in user [:stripe :customer-id])
-        session-ids (j/get-in user [:stripe :checkout-session-ids])]
-    (log "get-customer-id" customer-id)
-    (or customer-id
-        (when (seq session-ids)
-          (log "session-ids" session-ids)
-          (p/let [sessions (p/all (.map session-ids #(j/call-in stripe [:checkout :sessions :retrieve] %)))
-                  customer-ids (when (seq sessions)
-                                 (->> sessions
-                                      reverse
-                                      (map #(j/get % :customer))
-                                      (remove #(j/get % :deleted))
-                                      (remove nil?)))
-                  _ (log "customer-ids" customer-ids)
-                  customer-id (first customer-ids)
-                  user (j/assoc-in! user [:stripe :customer-id] customer-id)
-                  customer-id (get-customer-id-from-server user)]
-            (log "get-customer-id got:" customer-id)
-            (save-user user)
-            customer-id)))))
+(defn get-customer-id
+  "Get the Stripe customer ID from the user."
+  [user]
+  (j/get-in user [:stripe :customer-id]))
 
 (defn initiate-payment
   "Sends the user to the Stripe payment page to make a one-time payment or initiate a subscription.
@@ -95,8 +73,8 @@
   (let [user (j/get req :user)
         user-id (j/get user :id)]
     (if user-id
-      (p/let [customer-id (get-customer-id-from-server user)
-              customer-email (j/get-in user [:auth :email])
+      (p/let [customer-id (or (get-customer-id user)
+                              (create-customer user))
               price-id (j/get price :id)
               price-type (j/get price :type)
               price-mode (get {"one_time" "payment"
@@ -109,7 +87,8 @@
                               {:user-id user-id
                                :price-id price-id
                                :price-name (make-price-name price)})
-              packet {:billing_address_collection "auto"
+              packet {:customer customer-id
+                      :billing_address_collection "auto"
                       :line_items [{:price price-id :quantity 1}]
                       :metadata metadata
                       :mode price-mode
@@ -118,14 +97,8 @@
               packet (assoc packet
                             metadata-key
                             {:metadata metadata})
-              packet (cond customer-id (assoc packet :customer customer-id)
-                           customer-email (assoc packet :customer_email customer-email)
-                           :else packet)
-              session (j/call-in stripe [:checkout :sessions :create]
-                                 (clj->js packet))
-              user (j/update-in! user [:stripe :checkout-session-ids] #(.concat (or % #js []) #js [(j/get session :id)]))
-              _saved (save-user user)]
-        (log "sessions" (j/get-in user [:stripe :checkout-session-ids]))
+              session (j/call-in stripe [:checkout :sessions :create] (clj->js packet))]
+        (log "user" user)
         (.redirect res 303 (aget session "url")))
       (.redirect res 303 (build-absolute-uri req (or cancel-url "/"))))))
 
@@ -142,6 +115,7 @@
   "Returns any active subscription the currently logged in user has.
   `prices` are regular Stripe subscriptions."
   [customer-id prices]
+  (log "customer-id" customer-id)
   (p/let [price-ids (map #(j/get % :id) (js/Object.values prices))
           subscriptions-data (j/call-in stripe [:subscriptions :list] #js {:customer customer-id})
           subscriptions (.filter (or (j/get subscriptions-data :data) #js [])
@@ -190,25 +164,29 @@
   The request must be for a currently authenticated user for this to work (e.g. req.user has an id)."
   [req res & [return-url]]
   (p/let [user (j/get req :user)
-          customer-id (get-customer-id-from-server user)
+          customer-id (get-customer-id user)
           return-url (or return-url "/account")
           return-url (if (= (first return-url) "/")
                        (build-absolute-uri req return-url)
                        return-url)
-          session (j/call-in stripe
-                             [:billingPortal :sessions :create]
-                             (clj->js {:customer customer-id
-                                       :return_url return-url}))]
-    (.redirect res (aget session "url"))))
+          session (when customer-id
+                    (j/call-in stripe
+                               [:billingPortal :sessions :create]
+                               (clj->js {:customer customer-id
+                                         :return_url return-url})))]
+    (.redirect res (if session
+                     (j/get session :url)
+                     return-url))))
 
 (defn make-middleware:user-subscription
   "Express/Sitefox middleware for fetching the user's subscription."
   [price-ids {:keys [subscription-cache-time]}]
   (fn [req _res done]
-    (p/let [customer-id (get-customer-id req)
+    (p/let [user (j/get req :user)
+            customer-id (get-customer-id user)
             prices (when customer-id (cached-prices price-ids))
             subscription (cached-subscription customer-id prices (or subscription-cache-time (* 1000 60 60)))]
-      ;(log "stripe" (j/get user :stripe))
+      (log "user" user)
       (j/assoc-in! req [:stripe :subscription] subscription)
       (done))))
 
@@ -216,7 +194,8 @@
   (j/get-in sub [:pause_collection]))
 
 (defn payment-link [req price-id]
-  (-> (get-named-route req "account:start") (.replace ":price" price-id)))
+  (-> (get-named-route req "account:start")
+      (.replace ":price" price-id)))
 
 ; *** default routes *** ;
 
@@ -239,17 +218,14 @@
 
 (defn setup
   "Set up the routes for redirecting to subscriptions etc.
-   * `price-ids` is a list of price IDs that your users might be subscribed under (including grandfathered prices).
-   * `template` is the HTML string template fragment to render UIs into.
-   * `selector` is the query selector for where to mount UIs in the template.
-   * `options` can include `:success-url`, `:cancel-url`, `:metadata` to pass to Stripe,
-     and `:subscription-cache-time` in ms to cache a user's subscription and not hit the Stripe API on every request."
+  * `price-ids` is a list of price IDs that your users might be subscribed under (including grandfathered prices).
+  * `template` is the HTML string template fragment to render UIs into.
+  * `selector` is the query selector for where to mount UIs in the template.
+  * `options` can include `:success-url`, `:cancel-url`, `:metadata` to pass to Stripe,
+  and `:subscription-cache-time` in ms to cache a user's subscription and not hit the Stripe API on every request."
   [app price-ids template selector & [options]]
-  ;(j/call app :use (fn [req _res done] (j/update-in! req [:user] (fn [user] (js-delete user "stripe") user)) (done)))
+  ;(j/call app :use (fn [req _res done] (j/update-in! req [:user] (fn [user] (js-delete user "stripe") user)) (p/do! (save-user (j/get req :user)) (done))))
   (j/call app :use (make-middleware:user-subscription price-ids options))
   (j/call app :get (name-route app "/account/start/:price" "account:start") (make-initiate-payment-route price-ids options))
   (j/call app :get (name-route app "/account" "account") (fn [req res]
-                                                           (p/let [user (j/get req :user)
-                                                                   _customer-id (get-customer-id-from-server user)]
-                                                             (log "customer-id" _customer-id)
-                                                             (direct-to-template res template selector [component:account req])))))
+                                                           (direct-to-template res template selector [component:account req]))))
