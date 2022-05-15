@@ -213,8 +213,9 @@
          (when (is-paused subscription)
            [:p [:strong "Your subscription is currently paused."]])
          [:h2 "Update subscription"]
-         [:a.button {:href "/account/portal"} "visit the customer portal"]]
-        [:p "You have no active subscription."])]]))
+         [:a.button {:href (build-absolute-uri req "account:portal")} "visit the customer portal"]]
+        [:p "You have no active subscription."])
+      [:p [:a {:href (build-absolute-uri req "auth:sign-out")} "Sign out"]]]]))
 
 (defn setup
   "Set up the routes for redirecting to subscriptions etc.
@@ -227,5 +228,5 @@
   ;(j/call app :use (fn [req _res done] (j/update-in! req [:user] (fn [user] (js-delete user "stripe") user)) (p/do! (save-user (j/get req :user)) (done))))
   (j/call app :use (make-middleware:user-subscription price-ids options))
   (j/call app :get (name-route app "/account/start/:price" "account:start") (make-initiate-payment-route price-ids options))
-  (j/call app :get (name-route app "/account" "account") (fn [req res]
-                                                           (direct-to-template res template selector [component:account req]))))
+  (j/call app :get (name-route app "/account" "account:subscription") (fn [req res]
+                                                                        (direct-to-template res template selector [component:account req]))))
