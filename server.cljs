@@ -78,7 +78,7 @@
   (p/let [self *file*
           [app host port] (web/start)
           prices (cached-prices price-ids)
-          watch (fg #js [self "src/**/*.cljs" "public"])]
+          watch (fg #js [self "src/**/*.cljs" "index.html"])]
     (log "loaded prices:" (keys (js->clj prices)))
     (setup-routes app price-ids)
     (nbb-reloader watch #(setup-routes app price-ids))

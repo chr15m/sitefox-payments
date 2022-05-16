@@ -7,7 +7,7 @@
     [applied-science.js-interop :as j]
     ["stripe$default" :as Stripe]
     ["slugify$default" :as slugify]
-    [sitefox.util :refer [env-required]]
+    [sitefox.util :refer [env-required env]]
     [sitefox.web :refer [build-absolute-uri name-route get-named-route]]
     [sitefox.html :refer [direct-to-template]]
     [sitefox.db :refer [kv]]
@@ -15,6 +15,8 @@
     [sitefox.auth :refer [save-user]]))
 
 (def stripe (Stripe (env-required "STRIPE_SK")))
+
+(def stripe-portal-config-id (env "STRIPE_PORTAL_CONFIG_ID"))
 
 (defn make-price-name
   "Generates a key/name for this price based on the nickname, falling back to the ID."
@@ -115,7 +117,7 @@
   "Returns any active subscription the currently logged in user has.
   `prices` are regular Stripe subscriptions."
   [customer-id prices]
-  (log "customer-id" customer-id)
+  ;(log "customer-id" customer-id)
   (p/let [price-ids (map #(j/get % :id) (js/Object.values prices))
           subscriptions-data (j/call-in stripe [:subscriptions :list] #js {:customer customer-id})
           subscriptions (.filter (or (j/get subscriptions-data :data) #js [])
@@ -149,11 +151,11 @@
 (defn cached-subscription
   "Retrieve a customer's subscription from Stripe using get-any-valid-plan,
   or from the cache, and cache it if not yet cached."
-  [customer-id prices subscription-cache-time]
+  [customer-id prices subscription-cache-time force-refresh]
   (p/let [cache (kv "cache")
           k (str "subscription:" customer-id)
           subscription (.get cache k)
-          subscription (or subscription (get-any-valid-plan customer-id prices))]
+          subscription (or (and (not force-refresh) subscription) (get-any-valid-plan customer-id prices))]
     (.set cache k subscription subscription-cache-time)
     subscription))
 
@@ -166,29 +168,41 @@
   (p/let [user (j/get req :user)
           customer-id (get-customer-id user)
           return-url (or return-url "/account")
-          return-url (if (= (first return-url) "/")
-                       (build-absolute-uri req return-url)
-                       return-url)
+          return-url (str (if (= (first return-url) "/")
+                            (build-absolute-uri req return-url)
+                            return-url)
+                          "?refresh")
+          config {:customer customer-id
+                  :return_url return-url}
+          config (if stripe-portal-config-id (assoc config :configuration stripe-portal-config-id) config)
           session (when customer-id
                     (j/call-in stripe
                                [:billingPortal :sessions :create]
-                               (clj->js {:customer customer-id
-                                         :return_url return-url})))]
+                               (clj->js config)))]
     (.redirect res (if session
                      (j/get session :url)
                      return-url))))
 
+(defn make-send-to-portal-route
+  "Internal wrapper function to send the user to the Stripe portal."
+  [{:keys [return-url]}]
+  (fn [req res]
+    (send-to-customer-portal req res return-url)))
+
 (defn make-middleware:user-subscription
   "Express/Sitefox middleware for fetching the user's subscription."
   [price-ids {:keys [subscription-cache-time]}]
-  (fn [req _res done]
+  (fn [req res done]
     (p/let [user (j/get req :user)
             customer-id (get-customer-id user)
             prices (when customer-id (cached-prices price-ids))
-            subscription (cached-subscription customer-id prices (or subscription-cache-time (* 1000 60 60)))]
-      (log "user" user)
+            force-refresh-subscription (= (j/get-in req [:query :refresh]) "")
+            subscription (cached-subscription customer-id prices (or subscription-cache-time (* 1000 60 60)) force-refresh-subscription)]
+      ;(log "user" user)
       (j/assoc-in! req [:stripe :subscription] subscription)
-      (done))))
+      (if force-refresh-subscription
+        (.redirect res (j/get req :path))
+        (done)))))
 
 (defn is-paused [sub]
   (j/get-in sub [:pause_collection]))
@@ -228,5 +242,6 @@
   ;(j/call app :use (fn [req _res done] (j/update-in! req [:user] (fn [user] (js-delete user "stripe") user)) (p/do! (save-user (j/get req :user)) (done))))
   (j/call app :use (make-middleware:user-subscription price-ids options))
   (j/call app :get (name-route app "/account/start/:price" "account:start") (make-initiate-payment-route price-ids options))
+  (j/call app :get (name-route app "/account/portal" "account:portal") (make-send-to-portal-route options))
   (j/call app :get (name-route app "/account" "account:subscription") (fn [req res]
                                                                         (direct-to-template res template selector [component:account req]))))
