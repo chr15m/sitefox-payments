@@ -3,3 +3,6 @@ node_modules
 logs
 database.sqlite
 .clj-kondo/.cache
+workspace
+.envrc
+.npmrc
