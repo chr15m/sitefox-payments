@@ -1,0 +1,23 @@
+{
+  "name": "cljs-stripe-easy",
+  "version": "0.0.1",
+  "dependencies": {
+    "memory-cache": "^0.2.0",
+    "react": "^17.0.2",
+    "react-dom": "^17.0.2",
+    "sitefox": "chr15m/sitefox",
+    "slugify": "^1.6.5",
+    "stripe": "^8.219.0"
+  },
+  "devDependencies": {
+    "fast-glob": "^3.2.11",
+    "filewatcher": "^3.0.1",
+    "minimal-stylesheet": "0.1.0",
+    "nbb": "^0.3.9"
+  },
+  "scripts": {
+    "serve": "DEV=1 nbb --classpath node_modules/sitefox/src/:src/stripez server.cljs",
+    "serve-live": "nbb --classpath node_modules/sitefox/src/:src/stripez server.cljs",
+    "run-script": "nbb --classpath node_modules/sitefox/src/:src/stripez"
+  }
+}
