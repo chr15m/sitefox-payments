@@ -86,6 +86,7 @@
                               (create-customer user))
               price-id (j/get price :id)
               price-type (j/get price :type)
+              price-nickname (j/get price :nickname)
               price-mode (get {"one_time" "payment"
                                "recurring" "subscription"}
                               price-type)
@@ -95,7 +96,7 @@
               metadata (merge metadata
                               {:user-id user-id
                                :price-id price-id
-                               :price-description price
+                               :price-description price-nickname
                                :price-name (make-price-name price)
                                :type price-mode})
               packet {:customer customer-id
@@ -109,7 +110,7 @@
                             metadata-key
                             {:metadata metadata})
               session (j/call-in stripe [:checkout :sessions :create] (clj->js packet))]
-        (log "user" user)
+        ;(log "user" user)
         (.redirect res 303 (aget session "url")))
       (.redirect res 303 (build-absolute-uri req (or cancel-url "/"))))))
 
@@ -158,6 +159,54 @@
                              (j/assoc! payment-intent :price price))))]
     payments))
 
+(defn is-refunded
+  [payment]
+  (> (count (.filter (j/get-in payment [:charges :data]) #(j/get % :refunded))) 0))
+
+(defn is-active-payment
+  [payment now]
+  (let [validity (j/get-in payment [:price :metadata :validity])
+        validity-ms (* validity 60 1000)
+        now-ms (-> now .getTime)
+        paid-ms (* (j/get-in payment [:created]) 1000)]
+    (and
+      (> (+ paid-ms validity-ms) now-ms)
+      (not (is-refunded payment)))))
+
+(defn is-lifetime-payment
+  [payment]
+  (and
+    (j/get-in payment [:price :metadata :lifetime])
+    (not (is-refunded payment))))
+
+(defn is-paused [sub]
+  (boolean
+    (j/get-in sub [:pause_collection])))
+
+(defn get-active-plan
+  "Returns any valid subscription or payment from this user's payment list.
+  For payment based prices you must create a metadata key in the
+  Stripe prices UI called 'validity' with the value specifying the number of minutes:
+
+  ```
+  \"metadata\": {\"validity\": \"1440\"},
+  ```
+
+  You can also create a metadata key specifying a lifetime plan:
+
+  ```
+  \"metadata\": {\"lifetime\": \"true\"},
+  ```
+  "
+  [all-payments]
+  (when all-payments
+    (let [payments (j/get all-payments :payments)
+          subscriptions (j/get all-payments :subscriptions)
+          now (js/Date.)
+          active-time-based-plans (.filter payments #(is-active-payment % now))
+          active-lifetime-plans (.filter payments #(is-lifetime-payment %))
+          active-subscriptions (.sort subscriptions (fn [a b] (- (if (is-paused a) 1 0) (if (is-paused b) 1 0))))]
+      (or (first active-lifetime-plans) (first active-time-based-plans) (first active-subscriptions)))))
 
 (defn get-all-payments
   "Retreive all payments the user has made from Stripe, including subscriptions and one-time payments."
@@ -175,7 +224,7 @@
         nil))))
 
 (defn get-cached-payments
-  "Retrieve a customer's subscription from Stripe using get-any-valid-plan,
+  "Retrieve a customer's payments from Stripe
   or from the cache, and cache it if not yet cached."
   [customer-id prices payments-cache-time force-refresh]
   (p/let [cache (kv "cache")
@@ -232,14 +281,11 @@
         (.redirect res (j/get req :path))
         (done)))))
 
-(defn is-paused [sub]
-  (j/get-in sub [:pause_collection]))
-
 (defn get-plan-name
   "Get the name of the plan whether it's a subscription or one-time payment."
   [plan]
   (or (j/get-in plan [:plan :nickname])
-      (j/get-in plan [:metadata :price-description])))
+      (j/get-in plan [:price :nickname])))
 
 (defn payment-link [req price-id]
   (-> (get-named-route req "account:start")
@@ -248,22 +294,65 @@
 ; *** default routes *** ;
 
 (defn component:account
-  "A Reagent component for showing the user their subscription status."
-  [req]
-  (let [payments (j/get-in req [:stripe :payments])]
+  "A Reagent component for showing the user their subscription status.
+  You can use this as a template for building your own customised view.
+  Add your own account view to the app like this:
+
+  ```
+  (j/call app :get (name-route app \"/account\" \"account:subscription\")
+  (fn [req res] (direct-to-template res template selector [component:account req])))
+  ```"
+  [req prices]
+  (let [payments (j/get-in req [:stripe :payments])
+        plan (get-active-plan payments)]
     [:section.account
      [:div
 
-      [:h2 "Subscriptions"]
-      [:ul
-       (for [sub (j/get payments :subscriptions)]
-         [:li {:key (j/get sub :id)} (j/get-in sub [:plan :nickname]) (when (is-paused sub) " (paused)") ])]
-      [:a.button {:href (build-absolute-uri req "account:portal")} "Update subscriptions"]
+      [:h2 "Your plan"]
+      (if plan
+        [:<>
+         [:p "Thank you for your subscription."]
+         [:p "Your current plan is " [:strong (get-plan-name plan)] "."]
+         (when (is-paused plan)
+           [:p [:strong "Your plan is currently paused."]])
+         [:a.button {:href (build-absolute-uri req "account:portal")} "Manage subscription"]]
+        [:div
+         [:p "You have no active subscription."]
+         [:p "Choose a subscription:"]
+         [:ul
+          (for [[price-id price] (js->clj prices)]
+            (let [dollars (-> (get price "unit_amount") (/ 100))
+                  nickname (get price "nickname")]
+              [:li {:key price-id}
+               [:a {:href (payment-link req price-id)} "start " nickname]
+               " $"
+               dollars]))]])
 
-      [:h2 "Payments"]
-      [:ul
-       (for [pyt (j/get payments :payments)]
-         [:li {:key (j/get pyt :id)} (j/get-in pyt [:price :nickname])])]
+      (let [subscriptions (j/get payments :subscriptions)]
+        (when (seq subscriptions)
+          [:<>
+           [:h2 "Subscriptions"]
+           [:ul
+            (for [sub subscriptions]
+              [:li {:key (j/get sub :id)}
+               (j/get-in sub [:plan :nickname])
+               (when (is-paused sub) " (paused)")])]]))
+
+      (let [one-time-payments (j/get payments :payments)]
+        (when (seq one-time-payments)
+          [:<>
+           [:h2 "Payments"]
+           [:ul
+            (for [pyt one-time-payments]
+              [:li {:key (j/get pyt :id)}
+               (j/get-in pyt [:price :nickname])
+               (for [url (.map (or (j/get-in pyt [:charges :data]) #js[]) #(j/get % :receipt_url))]
+                 [:a {:href url :target "_BLANK" :key url} " receipt "])
+               [:a {:href (str "https://dashboard.stripe.com/test/payments/" (j/get pyt :id))} "link"]
+               (when (is-refunded pyt)
+                 " (refunded)")
+               (when (or (is-active-payment pyt (js/Date.))
+                         (is-lifetime-payment pyt)) " (active)")])]]))
 
       [:p [:a {:href (build-absolute-uri req "auth:sign-out")} "Sign out"]]]]))
 
@@ -280,4 +369,5 @@
   (j/call app :get (name-route app "/account/start/:price" "account:start") (make-initiate-payment-route price-ids options))
   (j/call app :get (name-route app "/account/portal" "account:portal") (make-send-to-portal-route options))
   (j/call app :get (name-route app "/account" "account:subscription") (fn [req res]
-                                                                        (direct-to-template res template selector [component:account req]))))
+                                                                        (p/let [prices (cached-prices price-ids)]
+                                                                          (direct-to-template res template selector [component:account req prices])))))
