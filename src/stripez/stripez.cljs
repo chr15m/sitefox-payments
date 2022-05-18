@@ -111,7 +111,9 @@
     (p/let [prices (cached-prices price-ids)
             price-id (j/get-in req [:params :price])
             price (j/get prices price-id)]
-      (initiate-payment req res price success-url cancel-url metadata))))
+      (if price
+        (initiate-payment req res price success-url cancel-url metadata)
+        (.redirect res 303 (build-absolute-uri req (or cancel-url "/")))))))
 
 (defn get-valid-subscriptions
   "Returns any active subscription the currently logged in user has.
