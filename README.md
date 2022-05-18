@@ -16,7 +16,7 @@ To use this module you need to use the Stripe UI to set up a few things.
 
 # Use it
 
-See `server.cljs` for an example server which you can run with `npm nbb serve`.
+See `server.cljs` for an example nbb server which you can run with `npm run serve`.
 
 Specify the IDs of the prices you want to use from your Stripe account.
 Here they are taking from an environment variable called `PRICES` (comma separated).
