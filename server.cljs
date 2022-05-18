@@ -13,7 +13,7 @@
     [sitefox.tracebacks :refer [install-traceback-emailer]]
     ;[sitefox.logging :refer [bind-console-to-file]]
     [sitefox.auth :as auth]
-    [sitefoxpayments :refer [cached-prices payment-link is-paused]]))
+    [sitefoxpayments :refer [cached-prices payment-link is-paused] :as payments]))
 
 ; (bind-console-to-file)
 
@@ -25,37 +25,14 @@
 (def price-ids (->> (.split (env-required "PRICES") ",")
                     (map keyword)))
 
-(defn component-subscription [req prices]
-  (let [subscription (j/get-in req [:stripe :subscription])]
-    (if subscription
-      [:<>
-       [:p "Hello. " [:strong "Thank you"] " for your subscription."]
-       [:p "Your current plan is " [:strong (j/get subscription "name")] "."]
-       (when (is-paused subscription)
-         [:p [:strong "Your subscription is currently paused."]])
-       [:h2 "Update subscription"]
-       [:a.button {:href "/account/portal"} "visit the customer portal"]]
-      [:<>
-       [:p "Choose a subscription:"]
-       (for [[price-id price] (js->clj prices)]
-         (let [dollars (-> (get price "unit_amount") (/ 100))
-               nickname (get price "nickname")]
-           [:p {:key price-id}
-            [:a {:href (payment-link req price-id)} "start " nickname]
-            " $"
-            dollars]))])))
-
-(defn component-main [req prices]
-  (let [user (j/get req :user)
-        subscription (j/get-in req [:stripe :subscription])]
+(defn component-main [req]
+  (let [user (j/get req :user)]
     [:div
      [:h1 "Subscriptions test"]
      (if user
        [:section
         [:p "Welcome, " (j/get-in user [:auth :email])]
-        (if subscription
-          [:p [:a {:href (web/get-named-route req "account:subscription")} "My account"]]
-          [component-subscription req prices])
+        [:p [:a {:href (web/get-named-route req "account:subscription")} "My account"]]
         [:p [:a {:href (web/get-named-route req "auth:sign-out")} "Sign out"]]]
        [:section
         [:p [:a {:href (web/get-named-route req "auth:sign-in")} "Sign in"]]])]))
@@ -68,11 +45,10 @@
                                :sign-in-redirect "account:subscription"
                                :sign-up-redirect "account:subscription")
   (auth/setup-reset-password app template "main")
-  (stripez/setup app price-ids template "main" {:subscription-cache-time (* 1000 60)})
+  (payments/setup app price-ids template "main" {:subscription-cache-time (* 1000 60)})
   (.get app "/"
         (fn [req res]
-          (p/let [prices (cached-prices price-ids)]
-            (direct-to-template res template "main" [component-main req prices])))))
+          (direct-to-template res template "main" [component-main req]))))
 
 (defonce init
   (p/let [self *file*
