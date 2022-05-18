@@ -2,7 +2,9 @@ Add subscriptions and payments to your Sitefox site.
 
 # Installation
 
-TBD
+`npm i chr15m/sitefoxpayments`
+
+Then add `node_modules/sitefoxpayments/src` to your classpath.
 
 # Set up
 
