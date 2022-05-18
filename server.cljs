@@ -18,7 +18,7 @@
 ; (bind-console-to-file)
 
 (when (env "ADMIN_EMAIL")
-  (install-traceback-emailer "chris@mccormickit.com"))
+  (install-traceback-emailer (env "ADMIN_EMAIL")))
 
 (def template (fs/readFileSync "index.html"))
 
