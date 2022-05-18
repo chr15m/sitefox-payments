@@ -19,7 +19,7 @@ To use this module you need to use the Stripe UI to set up a few things.
 See `server.cljs` for an example nbb server which you can run with `npm run serve`.
 
 Specify the IDs of the prices you want to use from your Stripe account.
-Here they are taking from an environment variable called `PRICES` (comma separated).
+Here they are taken from an environment variable called `PRICES` (comma separated).
 
 ```clojure
 (def price-ids (->> (.split (env-required "PRICES") ",")
@@ -45,9 +45,9 @@ Here's an example showing how to build links to all of your price options:
   (let [dollars (-> (get price "unit_amount") (/ 100))
         nickname (get price "nickname")]
     [:p {:key price-id}
-    [:a {:href (payment-link req price-id)} "start " nickname]
-    " $"
-    dollars]))
+      [:a {:href (payment-link req price-id)} "start " nickname]
+      " $"
+      dollars]))
 ```
 
 Get the currently authenticated user's subscribed plan.
