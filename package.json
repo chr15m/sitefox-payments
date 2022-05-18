@@ -16,8 +16,8 @@
     "nbb": "^0.3.9"
   },
   "scripts": {
-    "serve": "DEV=1 nbb --classpath node_modules/sitefox/src/:src/stripez server.cljs",
-    "serve-live": "nbb --classpath node_modules/sitefox/src/:src/stripez server.cljs",
-    "run-script": "nbb --classpath node_modules/sitefox/src/:src/stripez"
+    "serve": "DEV=1 nbb --classpath node_modules/sitefox/src/:src/sitefoxpayments server.cljs",
+    "serve-live": "nbb --classpath node_modules/sitefox/src/:src/sitefoxpayments server.cljs",
+    "run-script": "nbb --classpath node_modules/sitefox/src/:src/sitefoxpayments"
   }
 }
