@@ -11,8 +11,58 @@ Then add `node_modules/sitefoxpayments/src` to your classpath.
 To use this module you need to use the Stripe UI to set up a few things.
 
  * API keys. To use this library you will need API keys from your Stripe account. Set the environment variable `STRIPE_SK` to your Stripe secret key.
- * Products and prices. You'll need to create products and prices for the things you want people to be able to purchase or subscribe to.
+ * Products and prices. You'll need to create products and prices for the things you want people to be able to purchase or subscribe to. See "One-time payment plans" below.
  * Customer portal configuration (optional). Set the environment variable `STRIPE_PORTAL_CONFIG_ID` to use a specific portal config if different from the default.
+
+# Use it
+
+See `server.cljs` for an example server which you can run with `npm nbb serve`.
+
+Specify the IDs of the prices you want to use from your Stripe account.
+Here they are taking from an environment variable called `PRICES` (comma separated).
+
+```clojure
+(def price-ids (->> (.split (env-required "PRICES") ",")
+                    (map keyword)))
+```
+
+Add the routes to your Sitefox site in your `setup-routes` function:
+
+```clojure
+(sitefoxpayments/setup app price-ids template "main" {:subscription-cache-time (* 1000 60)})
+```
+
+Inside a view create a link which the user can click on to pay for a subscription:
+
+```clojure
+[:a {:href (payment-link req price-id)} "subscribe now"]
+```
+
+Here's an example showing how to build links to all of your price options:
+
+```clojure
+(for [[price-id price] (js->clj prices)]
+  (let [dollars (-> (get price "unit_amount") (/ 100))
+        nickname (get price "nickname")]
+    [:p {:key price-id}
+    [:a {:href (payment-link req price-id)} "start " nickname]
+    " $"
+    dollars]))
+```
+
+Get the currently authenticated user's subscribed plan.
+You can use this to gate features etc.
+
+```clojure
+(let [payments (j/get-in req [:stripe :payments])
+      plan (get-active-plan payments)])
+```
+
+Give the user a link to manage their subscription through the Stripe portal:
+
+```
+[:a.button {:href (build-absolute-uri req "account:portal")} "Manage subscription"]
+```
 
 # One-time payment plans
 
