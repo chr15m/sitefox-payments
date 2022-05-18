@@ -1,4 +1,4 @@
-(ns stripez
+(ns sitefoxpayments
   "A simple subscription/payments module wrapping the Stripe API.
   Give logged in Sitefox/Passport users a way to pay for subscriptions.
   Subscriptions can be Stripe recurring subscriptions (monthly, annual) or one-time payments (lifetime, 24hr, etc.)."

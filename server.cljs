@@ -13,7 +13,7 @@
     [sitefox.tracebacks :refer [install-traceback-emailer]]
     ;[sitefox.logging :refer [bind-console-to-file]]
     [sitefox.auth :as auth]
-    [stripez :refer [cached-prices payment-link is-paused]]))
+    [sitefoxpayments :refer [cached-prices payment-link is-paused]]))
 
 ; (bind-console-to-file)
 
