@@ -48,6 +48,13 @@
     (.set cache "prices" prices (* 1000 60 5))
     prices))
 
+(defn get-price-by-id
+  "Retrieve a price from the prices datastructure using its id instead of its name."
+  [prices price-id]
+  (first
+    (.filter (js/Object.values prices)
+             #(= (j/get % :id) price-id))))
+
 (defn create-customer
   "Create a new Stripe customer using their API and store it in the user's data."
   [user]
@@ -88,13 +95,15 @@
               metadata (merge metadata
                               {:user-id user-id
                                :price-id price-id
-                               :price-name (make-price-name price)})
+                               :price-description price
+                               :price-name (make-price-name price)
+                               :type price-mode})
               packet {:customer customer-id
                       :billing_address_collection "auto"
                       :line_items [{:price price-id :quantity 1}]
                       :metadata metadata
                       :mode price-mode
-                      :success_url (build-absolute-uri req (or success-url "/account"))
+                      :success_url (str (build-absolute-uri req (or success-url "/account")) "?refresh")
                       :cancel_url (build-absolute-uri req (or cancel-url "/"))}
               packet (assoc packet
                             metadata-key
@@ -109,8 +118,8 @@
   [price-ids {:keys [success-url cancel-url metadata]}]
   (fn [req res]
     (p/let [prices (cached-prices price-ids)
-            price-id (j/get-in req [:params :price])
-            price (j/get prices price-id)]
+            price-name (j/get-in req [:params :price])
+            price (j/get prices price-name)]
       (if price
         (initiate-payment req res price success-url cancel-url metadata)
         (.redirect res 303 (build-absolute-uri req (or cancel-url "/")))))))
@@ -123,43 +132,59 @@
   (p/let [price-ids (map #(j/get % :id) (js/Object.values prices))
           subscriptions-data (j/call-in stripe [:subscriptions :list] #js {:customer customer-id})
           subscriptions (.filter (or (j/get subscriptions-data :data) #js [])
-                                 (fn [sub] (contains? (set price-ids) (j/get-in sub [:plan :id]))))]
+                                 (fn [sub] (contains? (set price-ids) (j/get-in sub [:plan :id]))))
+          subscriptions (.map subscriptions
+                              (fn [sub]
+                                (let [price-id (j/get-in sub [:plan :id])
+                                      price (get-price-by-id prices price-id)]
+                                  (j/assoc! sub :price price))))]
     subscriptions))
 
 (defn get-customer-payments
-  "Returns all of the payments a customer has made."
-  [_customer-id _prices]
-  
-  )
+  "Returns all of the non-subscription payments a customer has made."
+  [customer-id prices]
+  (p/let [price-ids (map #(j/get % :id) (js/Object.values prices))
+          payment-intents-data (j/call-in stripe [:paymentIntents :list] #js {:customer customer-id
+                                                                              :limit 100})
+          ; TODO: use (j/call :autoPagingEach (fn [payment] ...collect ))
+          payments (.filter (or (j/get payment-intents-data :data) #js [])
+                            (fn [payment-intent]
+                              (and (contains? (set price-ids) (j/get-in payment-intent [:metadata :price-id]))
+                                   (= (j/get-in payment-intent [:metadata :type]) "payment"))))
+          payments (.map payments
+                         (fn [payment-intent]
+                           (let [price-id (j/get-in payment-intent [:metadata :price-id])
+                                 price (get-price-by-id prices price-id)]
+                             (j/assoc! payment-intent :price price))))]
+    payments))
 
-(defn get-any-valid-plan
-  "Returns any valid subscription or payment for the current user.
-  For payment based prices you must create a metadata key in the
-  Stripe prices UI called 'validity' with the value specifying the number of minutes:
 
-  ```
-  \"metadata\": {\"validity\": \"1440\"},
-  ```
-  "
+(defn get-all-payments
+  "Retreive all payments the user has made from Stripe, including subscriptions and one-time payments."
   [customer-id prices]
   (when customer-id
-    (log "Refreshing customer subscription from Stripe: " customer-id)
+    (log "Refreshing customer payments list: " customer-id)
     (p/catch
       (p/let [valid-subscriptions (when customer-id (get-valid-subscriptions customer-id prices))
               valid-payments (when customer-id (get-customer-payments customer-id prices))]
-        (or (first valid-payments) (first valid-subscriptions)))
-      (fn [err] (log (.toString err)) nil))))
+        #js {:subscriptions valid-subscriptions
+             :payments valid-payments})
+      (fn [err]
+        (log "Error refreshing payments")
+        (log (.toString err))
+        nil))))
 
-(defn cached-subscription
+(defn get-cached-payments
   "Retrieve a customer's subscription from Stripe using get-any-valid-plan,
   or from the cache, and cache it if not yet cached."
-  [customer-id prices subscription-cache-time force-refresh]
+  [customer-id prices payments-cache-time force-refresh]
   (p/let [cache (kv "cache")
-          k (str "subscription:" customer-id)
-          subscription (.get cache k)
-          subscription (or (and (not force-refresh) subscription) (get-any-valid-plan customer-id prices))]
-    (.set cache k subscription subscription-cache-time)
-    subscription))
+          k (str "payments:" customer-id)
+          payments (.get cache k)
+          payments (or (and (not force-refresh) payments)
+                       (get-all-payments customer-id prices))]
+    (.set cache k payments payments-cache-time)
+    payments))
 
 (defn send-to-customer-portal
   "Redirects the user to the Stripe customer portal where they can manage their
@@ -199,15 +224,22 @@
             customer-id (get-customer-id user)
             prices (when customer-id (cached-prices price-ids))
             force-refresh-subscription (= (j/get-in req [:query :refresh]) "")
-            subscription (cached-subscription customer-id prices (or subscription-cache-time (* 1000 60 60)) force-refresh-subscription)]
+            payments (get-cached-payments customer-id prices (or subscription-cache-time (* 1000 60 60)) force-refresh-subscription)]
       ;(log "user" user)
-      (j/assoc-in! req [:stripe :subscription] subscription)
+      (j/assoc-in! req [:stripe :payments] payments)
+      ;(j/assoc-in! req [:stripe :subscription] (current-subscription payments))
       (if force-refresh-subscription
         (.redirect res (j/get req :path))
         (done)))))
 
 (defn is-paused [sub]
   (j/get-in sub [:pause_collection]))
+
+(defn get-plan-name
+  "Get the name of the plan whether it's a subscription or one-time payment."
+  [plan]
+  (or (j/get-in plan [:plan :nickname])
+      (j/get-in plan [:metadata :price-description])))
 
 (defn payment-link [req price-id]
   (-> (get-named-route req "account:start")
@@ -218,19 +250,21 @@
 (defn component:account
   "A Reagent component for showing the user their subscription status."
   [req]
-  (let [subscription (j/get-in req [:stripe :subscription])]
+  (let [payments (j/get-in req [:stripe :payments])]
     [:section.account
      [:div
-      [:h2 "Your subscription"]
-      (if subscription
-        [:<>
-         [:p "Thank you for your subscription."]
-         [:p "Your current subscription is " [:strong (j/get-in subscription [:plan :nickname])] "."]
-         (when (is-paused subscription)
-           [:p [:strong "Your subscription is currently paused."]])
-         [:h2 "Update subscription"]
-         [:a.button {:href (build-absolute-uri req "account:portal")} "visit the customer portal"]]
-        [:p "You have no active subscription."])
+
+      [:h2 "Subscriptions"]
+      [:ul
+       (for [sub (j/get payments :subscriptions)]
+         [:li {:key (j/get sub :id)} (j/get-in sub [:plan :nickname]) (when (is-paused sub) " (paused)") ])]
+      [:a.button {:href (build-absolute-uri req "account:portal")} "Update subscriptions"]
+
+      [:h2 "Payments"]
+      [:ul
+       (for [pyt (j/get payments :payments)]
+         [:li {:key (j/get pyt :id)} (j/get-in pyt [:price :nickname])])]
+
       [:p [:a {:href (build-absolute-uri req "auth:sign-out")} "Sign out"]]]]))
 
 (defn setup
