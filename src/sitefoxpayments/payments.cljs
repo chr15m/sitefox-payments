@@ -69,8 +69,16 @@
 
 (defn get-customer-id
   "Get the Stripe customer ID from the user."
-  [user]
-  (j/get-in user [:stripe :customer-id]))
+  [user & [verify-customer-exists]]
+  (p/let [customer-id (j/get-in user [:stripe :customer-id])]
+    (if (and verify-customer-exists (seq customer-id))
+      (p/let [customer-check (p/catch
+                               (j/call-in stripe [:customers :retrieve] customer-id)
+                               (fn [_err]
+                                 (log "Customer not found, setting to nil.")
+                                 nil))]
+        (when (and customer-check (not (j/get customer-check :deleted))) customer-id))
+      customer-id)))
 
 (defn initiate-payment
   "Sends the user to the Stripe payment page to make a one-time payment or initiate a subscription.
@@ -82,8 +90,8 @@
   (let [user (j/get req :user)
         user-id (j/get user :id)]
     (if user-id
-      (p/let [customer-id (or (get-customer-id user)
-                              (create-customer user))
+      (p/let [customer-id (get-customer-id user true)
+              customer-id (when (nil? customer-id) (create-customer user))
               price-id (j/get price :id)
               price-type (j/get price :type)
               price-nickname (j/get price :nickname)
@@ -212,7 +220,7 @@
   "Retreive all payments the user has made from Stripe, including subscriptions and one-time payments."
   [customer-id prices]
   (when customer-id
-    (log "Refreshing customer payments list: " customer-id)
+    (log "Refreshing customer payments list:" customer-id)
     (p/catch
       (p/let [valid-subscriptions (when customer-id (get-valid-subscriptions customer-id prices))
               valid-payments (when customer-id (get-customer-payments customer-id prices))]
@@ -242,7 +250,7 @@
   The request must be for a currently authenticated user for this to work (e.g. req.user has an id)."
   [req res & [return-url]]
   (p/let [user (j/get req :user)
-          customer-id (get-customer-id user)
+          customer-id (get-customer-id user true)
           return-url (or return-url "/account")
           return-url (str (if (= (first return-url) "/")
                             (build-absolute-uri req return-url)
