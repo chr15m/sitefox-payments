@@ -12,7 +12,7 @@ To use this module you need to use the Stripe UI to set up a few things.
 
  * API keys. To use this library you will need API keys from your Stripe account. Set the environment variable `STRIPE_SK` to your Stripe secret key.
  * Products and prices. You'll need to create products and prices for the things you want people to be able to purchase or subscribe to. See "One-time payment plans" below.
- * Customer portal configuration (optional). Set the environment variable `STRIPE_PORTAL_CONFIG_ID` to use a specific portal config if different from the default.
+ * Customer portal configuration (optional). Set the environment variable `STRIPE_PORTAL_CONFIG_ID` to use a specific portal config if different from the default. See [#stripe-cutomer-portal-link](Stripe customer portal link) below for details.
 
 # Use it
 
@@ -70,10 +70,44 @@ You can use this to gate features etc.
       plan (get-active-plan payments)])
 ```
 
-Give the user a link to manage their subscription through the Stripe portal:
+# Stripe customer portal link
+
+You can give the user a link to manage their subscription through the Stripe portal:
 
 ```
 [:a.button {:href (build-absolute-uri req "account:portal")} "Manage subscription"]
+```
+
+To create and update configs you can use the [Stripe Customer Portal Configurations API](https://stripe.com/docs/api/customer_portal/configuration).
+
+Create:
+
+```
+curl https://api.stripe.com/v1/billing_portal/configurations \
+  -u ${STRIPE_SK}: \
+  -d "features[customer_update][allowed_updates][]"=email \
+  -d "features[customer_update][allowed_updates][]"=tax_id \
+  -d "features[customer_update][enabled]"=true \
+  -d "features[invoice_history][enabled]"=true \
+  -d "business_profile[privacy_policy_url]"="https://example.com/privacy" \
+  -d "business_profile[terms_of_service_url]"="https://example.com/terms"
+```
+
+Update:
+
+```
+curl https://api.stripe.com/v1/billing_portal/configurations/CONFIG-ID \
+  -u ${STRIPE_SK}: \
+  -d "business_profile[privacy_policy_url]"="https://example.com/privacy" \
+  -d "business_profile[terms_of_service_url]"="https://example.com/terms"
+```
+
+List:
+
+```
+curl -G https://api.stripe.com/v1/billing_portal/configurations \
+  -u ${STRIPE_SK}: \
+  -d limit=3
 ```
 
 # One-time payment plans
