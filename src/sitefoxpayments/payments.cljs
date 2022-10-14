@@ -104,7 +104,7 @@
                       :line_items [{:price price-id :quantity 1}]
                       :metadata metadata
                       :mode price-mode
-                      :success_url (str (build-absolute-uri req (or success-url "/account")) "?refresh")
+                      :success_url (str (build-absolute-uri req (or success-url (get-named-route req "account:subscription"))) "?refresh")
                       :cancel_url (build-absolute-uri req (or cancel-url "/"))}
               packet (assoc packet
                             metadata-key
@@ -315,7 +315,7 @@
          [:p "Your current plan is " [:strong (get-plan-name plan)] "."]
          (when (is-paused plan)
            [:p [:strong "Your plan is currently paused."]])
-         [:a.button {:href (build-absolute-uri req "account:portal")} "Manage subscription"]]
+         [:a.button {:href (build-absolute-uri req (get-named-route req "account:portal"))} "Manage subscription"]]
         [:div
          [:p "You have no active subscription."]
          [:p "Choose a subscription:"]
@@ -354,7 +354,7 @@
                (when (or (is-active-payment pyt (js/Date.))
                          (is-lifetime-payment pyt)) " (active)")])]]))
 
-      [:p [:a {:href (build-absolute-uri req "auth:sign-out")} "Sign out"]]]]))
+      [:p [:a {:href (build-absolute-uri req (get-named-route req "auth:sign-out"))} "Sign out"]]]]))
 
 (defn setup
   "Set up the routes for redirecting to subscriptions etc.
