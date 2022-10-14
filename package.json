@@ -1,11 +1,10 @@
 {
-  "name": "cljs-stripe-easy",
+  "name": "sitefox-payments",
   "version": "0.0.1",
   "dependencies": {
     "memory-cache": "^0.2.0",
     "react": "^17.0.2",
     "react-dom": "^17.0.2",
-    "sitefox": "chr15m/sitefox",
     "slugify": "^1.6.5",
     "stripe": "^8.219.0"
   },
@@ -13,7 +12,8 @@
     "fast-glob": "^3.2.11",
     "filewatcher": "^3.0.1",
     "minimal-stylesheet": "0.1.0",
-    "nbb": "^0.3.9"
+    "nbb": "^0.3.9",
+    "sitefox": "chr15m/sitefox"
   },
   "scripts": {
     "serve": "DEV=1 nbb --classpath node_modules/sitefox/src/:src/sitefoxpayments server.cljs",
