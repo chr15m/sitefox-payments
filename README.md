@@ -2,9 +2,9 @@ Add subscriptions and payments to your Sitefox site.
 
 # Installation
 
-`npm i chr15m/sitefoxpayments`
+`npm i chr15m/sitefox-payments`
 
-Then add `node_modules/sitefoxpayments/src` to your classpath.
+Then add `node_modules/sitefox-payments/src` to your classpath.
 
 # Set up
 
@@ -29,8 +29,20 @@ Here they are taken from an environment variable called `PRICES` (comma separate
 Add the routes to your Sitefox site in your `setup-routes` function:
 
 ```clojure
-(sitefoxpayments/setup app price-ids template "main" {:subscription-cache-time (* 1000 60)})
+(ns myapp
+  (:require ["sitefoxpayments" :as payments]))
+
+(payments/setup app price-ids template "main" {:subscription-cache-time (* 1000 60)})
 ```
+
+This will add the following routes:
+
+ * `/account/start/:price` - initiate a payment using a particular price.
+ * `/account/portal` - send the user to the Stripe portal to manage their subscription.
+ * `/account` - view of the user's account.
+
+A middleware will also be installed that adds the currently authenticated user's subscription information.
+It is added to the Express `req` object under `req.stripe.payments`. See below for `get-active-plan`.
 
 Inside a view create a link which the user can click on to pay for a subscription:
 
