@@ -91,7 +91,7 @@
         user-id (j/get user :id)]
     (if user-id
       (p/let [customer-id (get-customer-id user true)
-              customer-id (when (nil? customer-id) (create-customer user))
+              customer-id (or customer-id (create-customer user))
               price-id (j/get price :id)
               price-type (j/get price :type)
               price-nickname (j/get price :nickname)
