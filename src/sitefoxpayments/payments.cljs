@@ -371,7 +371,9 @@
   * `selector` is the query selector for where to mount UIs in the template.
   * `options` can include `:success-url`, `:cancel-url`, `:metadata` to pass to Stripe,
   `:subscription-cache-time` in ms to cache a user's subscription and not hit the Stripe API on every request,
-  and `:skip-account-view` to not mount the account view so that a user can mount their own."
+  and `:skip-account-view` to not mount the account view so that a user can mount their own.
+
+  Note: if you use your own account view you must specify `:success-url` in the options."
   [app price-ids template selector & [options]]
   ;(j/call app :use (fn [req _res done] (j/update-in! req [:user] (fn [user] (js-delete user "stripe") user)) (p/do! (save-user (j/get req :user)) (done))))
   (j/call app :use (make-middleware:user-subscription price-ids options))
