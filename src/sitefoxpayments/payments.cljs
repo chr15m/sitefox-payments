@@ -110,6 +110,7 @@
               packet {:customer customer-id
                       :billing_address_collection "auto"
                       :line_items [{:price price-id :quantity 1}]
+                      :allow_promotion_codes true
                       :metadata metadata
                       :mode price-mode
                       :success_url (str (build-absolute-uri req (or success-url (get-named-route req "account:subscription"))) "?refresh")
