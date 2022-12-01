@@ -126,13 +126,15 @@
 (defn make-initiate-payment-route
   "Internal wrapper function to set up Stripe payment routes."
   [price-ids {:keys [success-url cancel-url metadata]}]
-  (fn [req res]
-    (p/let [prices (cached-prices price-ids)
-            price-name (j/get-in req [:params :price])
-            price (j/get prices price-name)]
-      (if price
-        (initiate-payment req res price success-url cancel-url metadata)
-        (.redirect res 303 (build-absolute-uri req (or cancel-url "/")))))))
+  (fn [req res done]
+    (p/catch
+      (p/let [prices (cached-prices price-ids)
+              price-name (j/get-in req [:params :price])
+              price (j/get prices price-name)]
+        (if price
+          (initiate-payment req res price success-url cancel-url metadata)
+          (.redirect res 303 (build-absolute-uri req (or cancel-url "/")))))
+      done)))
 
 (defn get-valid-subscriptions
   "Returns any active subscription the currently logged in user has.
@@ -271,24 +273,28 @@
 (defn make-send-to-portal-route
   "Internal wrapper function to send the user to the Stripe portal."
   [{:keys [return-url]}]
-  (fn [req res]
-    (send-to-customer-portal req res return-url)))
+  (fn [req res done]
+    (p/catch
+      (send-to-customer-portal req res return-url)
+      done)))
 
 (defn make-middleware:user-subscription
   "Express/Sitefox middleware for fetching the user's subscription."
   [price-ids {:keys [subscription-cache-time]}]
   (fn [req res done]
-    (p/let [user (j/get req :user)
-            customer-id (get-customer-id user)
-            prices (when customer-id (cached-prices price-ids))
-            force-refresh-subscription (= (j/get-in req [:query :refresh]) "")
-            payments (get-cached-payments customer-id prices (or subscription-cache-time (* 1000 60 60)) force-refresh-subscription)]
-      ;(log "user" user)
-      (j/assoc-in! req [:stripe :payments] payments)
-      ;(j/assoc-in! req [:stripe :subscription] (current-subscription payments))
-      (if force-refresh-subscription
-        (.redirect res (j/get req :path))
-        (done)))))
+    (p/catch
+      (p/let [user (j/get req :user)
+              customer-id (get-customer-id user)
+              prices (when customer-id (cached-prices price-ids))
+              force-refresh-subscription (= (j/get-in req [:query :refresh]) "")
+              payments (get-cached-payments customer-id prices (or subscription-cache-time (* 1000 60 60)) force-refresh-subscription)]
+        ;(log "user" user)
+        (j/assoc-in! req [:stripe :payments] payments)
+        ;(j/assoc-in! req [:stripe :subscription] (current-subscription payments))
+        (if force-refresh-subscription
+          (.redirect res (j/get req :path))
+          (done)))
+      done)))
 
 (defn get-plan-name
   "Get the name of the plan whether it's a subscription or one-time payment."
@@ -381,7 +387,9 @@
   (j/call app :get (name-route app "/account/start/:price" "account:start") (make-initiate-payment-route price-ids options))
   (j/call app :get (name-route app "/account/portal" "account:portal") (make-send-to-portal-route options))
   (when (not (:skip-account-view options))
-    (j/call app :get (name-route app "/account" "account:subscription") (fn [req res]
-                                                                          (p/let [prices (cached-prices price-ids)]
-                                                                            (direct-to-template res template selector [component:account req prices])))))
+    (j/call app :get (name-route app "/account" "account:subscription") (fn [req res done]
+                                                                          (p/catch
+                                                                            (p/let [prices (cached-prices price-ids)]
+                                                                              (direct-to-template res template selector [component:account req prices]))
+                                                                            done))))
   app)
