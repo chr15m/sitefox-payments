@@ -12,7 +12,7 @@ To use this module you need to use the Stripe UI to set up a few things.
 
  * API keys. To use this library you will need API keys from your Stripe account. Set the environment variable `STRIPE_SK` to your Stripe secret key.
  * Products and prices. You'll need to create products and prices for the things you want people to be able to purchase or subscribe to. See "One-time payment plans" below.
- * Customer portal configuration (optional). Set the environment variable `STRIPE_PORTAL_CONFIG_ID` to use a specific portal config if different from the default. See [#stripe-cutomer-portal-link](Stripe customer portal link) below for details.
+ * Customer portal configuration (optional). Set the environment variable `STRIPE_PORTAL_CONFIG_ID` to use a specific portal config if different from the default. See [Stripe customer portal link](#stripe-cutomer-portal-link) below for details.
 
 # Use it
 
