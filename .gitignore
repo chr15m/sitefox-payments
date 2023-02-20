@@ -1,5 +1,6 @@
 node_modules
 .*.swp
+.cpcache
 logs
 database.sqlite
 .clj-kondo/.cache
