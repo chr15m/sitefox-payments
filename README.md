@@ -1,5 +1,7 @@
 Add subscriptions and payments to your Sitefox site.
 
+See [API.md](./API.md) for comprehensive documentation.
+
 # Installation
 
 `npm i chr15m/sitefox-payments`
