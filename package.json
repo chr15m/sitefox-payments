@@ -12,12 +12,13 @@
     "fast-glob": "^3.2.11",
     "filewatcher": "^3.0.1",
     "minimal-stylesheet": "0.1.0",
-    "nbb": "^0.3.9",
+    "nbb": "^1.2.179",
     "sitefox": "chr15m/sitefox"
   },
   "scripts": {
     "serve": "DEV=1 nbb --classpath node_modules/sitefox/src/:src/sitefoxpayments server.cljs",
     "serve-live": "nbb --classpath node_modules/sitefox/src/:src/sitefoxpayments server.cljs",
-    "run-script": "nbb --classpath node_modules/sitefox/src/:src/sitefoxpayments"
+    "run-script": "nbb --classpath node_modules/sitefox/src/:src/sitefoxpayments",
+    "doc": "npx nbb src/doc.cljs > API.md"
   }
 }
