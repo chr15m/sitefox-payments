@@ -31,10 +31,17 @@
   `price-ids` should be a list of Stripe price IDs.
   Returns a map keyed on price nicknames or price IDs
   if nicknames are missing. Values are the price data."
-  [price-ids]
+  [& [price-ids]]
   (log "Refreshing price info from the Stripe API.")
-  (p/let [price-ids (map name price-ids)
-          prices (p/all (map #(j/call-in stripe [:prices :retrieve] %) price-ids))
+  (p/let [prices
+          (if price-ids
+            (let [price-ids (map name price-ids)]
+              (p/all
+                (map #(j/call-in stripe [:prices :retrieve] %)
+                     price-ids)))
+            (p/let [all-prices (j/call-in stripe [:prices :list]
+                                          #js {:active true})]
+              (j/get all-prices :data)))
           named-prices (apply merge
                               (map (fn [price]
                                      {(make-price-name price)
