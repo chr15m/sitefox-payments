@@ -148,7 +148,9 @@
                                  (clj->js packet))]
         ;(log "user" user)
         (.redirect res 303 (aget session "url")))
-      (.redirect res 303 (build-absolute-uri req (or cancel-url "/"))))))
+      (do
+        (js/console.log "User is not logged in. Redirecting to cancel-url.")
+        (.redirect res 303 (build-absolute-uri req (or cancel-url "/")))))))
 
 (defn make-initiate-payment-route
   "Internal wrapper function to set up Stripe payment routes."
