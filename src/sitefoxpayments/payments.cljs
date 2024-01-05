@@ -131,7 +131,6 @@
                       :billing_address_collection "auto"
                       :line_items [{:price price-id :quantity 1}]
                       :allow_promotion_codes true
-                      :payment_method_collection "if_required"
                       :metadata metadata
                       :mode price-mode
                       :success_url (str (build-absolute-uri
@@ -141,6 +140,10 @@
                                                 req "account:subscription")))
                                         "?refresh")
                       :cancel_url (build-absolute-uri req (or cancel-url "/"))}
+              packet (if (= price-mode "subscription")
+                       (assoc packet
+                              :payment_method_collection "if_required")
+                       packet)
               packet (assoc packet
                             metadata-key
                             {:metadata metadata})
