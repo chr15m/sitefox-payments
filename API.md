@@ -1,9 +1,9 @@
-## ( make-price-name   price )
+## ( make-price-name price )
 
 Generates a key/name for this price based on the nickname,
   falling back to the ID.
 
-## ( get-price-info   price-ids )
+## ( get-price-info & [price-ids] )
 
 Retrieve price data from the Stripe API e.g.
   for caching locally or displaying for the user.
@@ -11,26 +11,26 @@ Retrieve price data from the Stripe API e.g.
   Returns a map keyed on price nicknames or price IDs
   if nicknames are missing. Values are the price data.
 
-## ( cached-prices   price-ids )
+## ( cached-prices price-ids )
 
 Retrieve price data from Stripe using get-price-info,
   or from the cache, and cache it if not yet cached.
 
-## ( get-price-by-id   prices price-id )
+## ( get-price-by-id prices price-id )
 
 Retrieve a price from the prices datastructure
   using its id instead of its name.
 
-## ( create-customer   user )
+## ( create-customer user )
 
 Create a new Stripe customer using their
   API and store it in the user's data.
 
-## ( get-customer-id   user & [verify-customer-exists] )
+## ( get-customer-id user & [verify-customer-exists] )
 
 Get the Stripe customer ID from the user.
 
-## ( initiate-payment   req res price success-url cancel-url & [metadata] )
+## ( initiate-payment req res price success-url cancel-url & [metadata] )
 
 Sends the user to the Stripe payment page to make a
   one-time payment or initiate a subscription. In the
@@ -42,20 +42,20 @@ Sends the user to the Stripe payment page to make a
   request must be for a currently authenticated user for
   this to work (e.g. req.user has an id).
 
-## ( make-initiate-payment-route   price-ids {:keys [success-url cancel-url metadata]} )
+## ( make-initiate-payment-route price-ids {:keys [success-url cancel-url metadata]} )
 
 Internal wrapper function to set up Stripe payment routes.
 
-## ( get-valid-subscriptions   customer-id prices )
+## ( get-valid-subscriptions customer-id prices )
 
 Returns any active subscription the currently logged in user has.
   `prices` are regular Stripe subscriptions.
 
-## ( get-customer-payments   customer-id prices )
+## ( get-customer-payments customer-id prices )
 
 Returns all of the non-subscription payments a customer has made.
 
-## ( get-active-plan   all-payments )
+## ( get-active-plan all-payments )
 
 Returns any valid subscription or payment from this user's payment list.
   For payment based prices you must create a metadata key in the Stripe
@@ -72,17 +72,17 @@ Returns any valid subscription or payment from this user's payment list.
   ```
   
 
-## ( get-all-payments   customer-id prices )
+## ( get-all-payments customer-id prices )
 
 Retreive all payments the user has made from Stripe,
   including subscriptions and one-time payments.
 
-## ( get-cached-payments   customer-id prices payments-cache-time force-refresh )
+## ( get-cached-payments customer-id prices payments-cache-time force-refresh )
 
 Retrieve a customer's payments from Stripe
   or from the cache, and cache it if not yet cached.
 
-## ( send-to-customer-portal   req res & [return-url] )
+## ( send-to-customer-portal req res & [return-url] )
 
 Redirects the user to the Stripe customer portal where they can manage their
   subscription status according to the parameters you have set in the Stripe UI.
@@ -90,19 +90,23 @@ Redirects the user to the Stripe customer portal where they can manage their
   they cancel/exit. The request must be for a currently authenticated user for
   this to work (e.g. req.user has an id).
 
-## ( make-send-to-portal-route   {:keys [return-url]} )
+## ( make-send-to-portal-route {:keys [return-url]} )
 
 Internal wrapper function to send the user to the Stripe portal.
 
-## ( make-middleware:user-subscription   price-ids {:keys [subscription-cache-time]} )
+## ( update-user-payments user price-ids & [force-refresh subscription-cache-time] )
+
+Update/cache the user's list of payments from the Stripe API.
+
+## ( make-middleware:user-subscription price-ids {:keys [subscription-cache-time]} )
 
 Express/Sitefox middleware for fetching the user's subscription.
 
-## ( get-plan-name   plan )
+## ( get-plan-name plan )
 
 Get the name of the plan whether it's a subscription or one-time payment.
 
-## ( component:account   req prices )
+## ( component:account req prices )
 
 A Reagent component for showing the user their subscription status.
   You can use this as a template for building your own customised view.
@@ -115,7 +119,7 @@ A Reagent component for showing the user their subscription status.
                         [component:account req])))
   ```
 
-## ( setup   app price-ids template selector & [options] )
+## ( setup app price-ids template selector & [options] )
 
 Set up the routes for redirecting to subscriptions etc.
   * `price-ids` is a list of price IDs that your users
