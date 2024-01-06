@@ -333,22 +333,35 @@
       (send-to-customer-portal req res return-url)
       done)))
 
+(defn update-user-payments
+  "Update/cache the user's list of payments from the Stripe API."
+  [user price-ids & [force-refresh subscription-cache-time]]
+  (p/let [customer-id (get-customer-id user)
+          prices (when customer-id (cached-prices price-ids))
+          payments (get-cached-payments
+                     customer-id prices
+                     (or subscription-cache-time
+                         (* 1000 60 60)) force-refresh)]
+    (-> user
+        (j/assoc-in! [:stripe :payments] payments)
+        save-user)))
+
 (defn make-middleware:user-subscription
   "Express/Sitefox middleware for fetching the user's subscription."
   [price-ids {:keys [subscription-cache-time]}]
   (fn [req res done]
     (p/catch
       (p/let [user (j/get req :user)
-              customer-id (get-customer-id user)
-              prices (when customer-id (cached-prices price-ids))
-              force-refresh-subscription (= (j/get-in req [:query :refresh]) "")
-              payments (get-cached-payments
-                         customer-id prices
-                         (or subscription-cache-time
-                             (* 1000 60 60)) force-refresh-subscription)]
-        ;(log "user" user)
-        (j/assoc-in! req [:stripe :payments] payments)
-        ;(j/assoc-in! req [:stripe :subscription] (current-subscription payments))
+              force-refresh-subscription
+              (= (j/get-in req [:query :refresh]) "")
+              user (update-user-payments
+                     user
+                     price-ids
+                     force-refresh-subscription
+                     subscription-cache-time)]
+        ; legacy payments cache
+        (j/assoc-in! req [:stripe :payments]
+                     (j/get-in user [:stripe :payments]))
         (if force-refresh-subscription
           (.redirect res (j/get req :path))
           (done)))
