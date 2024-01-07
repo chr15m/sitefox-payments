@@ -255,8 +255,8 @@
   "
   [all-payments]
   (when all-payments
-    (let [payments (j/get all-payments :payments)
-          subscriptions (j/get all-payments :subscriptions)
+    (let [payments (or (j/get all-payments :payments) #js [])
+          subscriptions (or (j/get all-payments :subscriptions) #js [])
           now (js/Date.)
           active-time-based-plans (.filter payments #(is-active-payment % now))
           active-lifetime-plans (.filter payments #(is-lifetime-payment %))
