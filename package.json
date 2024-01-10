@@ -19,6 +19,6 @@
     "serve": "DEV=1 nbb --classpath node_modules/sitefox/src/:src/sitefoxpayments server.cljs",
     "serve-live": "nbb --classpath node_modules/sitefox/src/:src/sitefoxpayments server.cljs",
     "run-script": "nbb --classpath node_modules/sitefox/src/:src/sitefoxpayments",
-    "doc": "npx nbb src/doc.cljs > API.md"
+    "doc": "npx nbb src/doc.cljs > API.md; npx nbb src/doc.cljs src/sitefoxpayments/util.cljs > API-util.md"
   }
 }
