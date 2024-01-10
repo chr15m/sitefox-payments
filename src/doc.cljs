@@ -1,10 +1,13 @@
 (ns doc
   (:require 
     ["fs" :as fs]
+    ["process" :refer [argv]]
     [clojure.core :refer [read-string]]
     [clojure.string :refer [join]]))
 
-(let [f (-> (fs/readFileSync "src/sitefoxpayments/payments.cljs") .toString)
+(defn main [args]
+(let [f (-> (fs/readFileSync (or (first args)
+                                 "src/sitefoxpayments/payments.cljs")) .toString)
       code (read-string (str "[" f "]"))]
   (doseq [form code]
     (case (keyword (first form))
@@ -24,4 +27,8 @@
                (print doc)
                (print)))
       ;:ns (print "NS" form)
-      nil)))
+      nil))))
+
+(let [args (.slice argv 3)]
+  (when (seq args)
+    (main args)))
