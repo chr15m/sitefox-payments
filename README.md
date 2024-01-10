@@ -1,6 +1,7 @@
 Add subscriptions and payments to your Sitefox site.
 
 See [API.md](./API.md) for comprehensive documentation.
+See [API-util.md](./API-util.md) for utility functions that can also be used in the browser.
 
 # Installation
 
