@@ -4,6 +4,7 @@
   Subscriptions can be Stripe recurring subscriptions (monthly, annual)
   or one-time payments (lifetime, 24hr, etc.)."
   (:require
+    ["url" :refer [URL]]
     [promesa.core :as p]
     [applied-science.js-interop :as j]
     ["stripe$default" :as Stripe]
@@ -117,18 +118,22 @@
                                :price-description price-nickname
                                :price-name (make-price-name price)
                                :type price-mode})
+              success-url (build-absolute-uri
+                            req
+                            (or success-url
+                                (get-named-route
+                                  req "account:subscription")))
+              success-url (-> (URL. success-url)
+                              (doto (-> (aget "searchParams")
+                                        (.set "refresh" 1)))
+                              .toString)
               packet {:customer customer-id
                       :billing_address_collection "auto"
                       :line_items [{:price price-id :quantity 1}]
                       :allow_promotion_codes true
                       :metadata metadata
                       :mode price-mode
-                      :success_url (str (build-absolute-uri
-                                          req
-                                          (or success-url
-                                              (get-named-route
-                                                req "account:subscription")))
-                                        "?refresh")
+                      :success_url success-url
                       :cancel_url (build-absolute-uri req (or cancel-url "/"))}
               packet (if (= price-mode "subscription")
                        (assoc packet
@@ -152,9 +157,12 @@
     (p/catch
       (p/let [prices (cached-prices price-ids)
               price-name (j/get-in req [:params :price])
-              price (j/get prices price-name)]
+              price (j/get prices price-name)
+              next-url (j/get-in req [:query :next])]
         (if price
-          (initiate-payment req res price success-url cancel-url metadata)
+          (initiate-payment req res price
+                            (or next-url success-url)
+                            cancel-url metadata)
           (.redirect res 303 (build-absolute-uri req (or cancel-url "/")))))
       done)))
 
@@ -243,10 +251,13 @@
   (p/let [user (j/get req :user)
           customer-id (get-customer-id user true)
           return-url (or return-url "/account")
-          return-url (str (if (= (first return-url) "/")
-                            (build-absolute-uri req return-url)
-                            return-url)
-                          "?refresh")
+          return-url (if (= (first return-url) "/")
+                       (build-absolute-uri req return-url)
+                       return-url)
+          return-url (-> (URL. return-url)
+                         (doto (-> (aget "searchParams")
+                                   (.set "refresh" 1)))
+                         .toString)
           config {:customer customer-id
                   :return_url return-url}
           config (if stripe-portal-config-id
