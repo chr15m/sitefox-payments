@@ -20,7 +20,7 @@
 
 (defn is-refunded
   [payment]
-  (> (count (.filter (j/get-in payment [:charges :data])
+  (> (count (.filter (or (j/get-in payment [:charges :data]) #js [])
                      #(j/get % :refunded))) 0))
 
 (defn is-active-payment
