@@ -298,7 +298,7 @@
     (p/catch
       (p/let [user (j/get req :user)
               force-refresh-subscription
-              (= (j/get-in req [:query :refresh]) "")
+              (not (nil? (j/get-in req [:query :refresh])))
               user (update-user-payments
                      user
                      price-ids
