@@ -320,11 +320,12 @@
       (p/let [user (j/get req :user)
               force-refresh-subscription
               (not (nil? (j/get-in req [:query :refresh])))
-              user (update-user-payments
-                     user
-                     price-ids
-                     force-refresh-subscription
-                     subscription-cache-time)]
+              user (when user
+                     (update-user-payments
+                       user
+                       price-ids
+                       force-refresh-subscription
+                       subscription-cache-time))]
         ; legacy payments cache
         (j/assoc-in! req [:stripe :payments]
                      (j/get-in user [:stripe :payments]))
