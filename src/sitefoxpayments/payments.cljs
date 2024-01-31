@@ -241,6 +241,20 @@
     (.set cache k payments payments-cache-time)
     payments))
 
+(defn get-cached-customer
+  "Retrieve a customer from Stripe or cache,
+  cache it if not yet in the cache."
+  [customer-id customer-cache-time force-refresh]
+  (p/let [cache (kv "cache")
+          k (str "customer:" customer-id)
+          customer (.get cache k)
+          customer (or (and (not force-refresh) customer)
+                       (j/call-in stripe
+                                  [:customers :retrieve]
+                                  customer-id))]
+    (.set cache k customer customer-cache-time)
+    customer))
+
 (defn send-to-customer-portal
   "Redirects the user to the Stripe customer portal where they can manage their
   subscription status according to the parameters you have set in the Stripe UI.
@@ -283,12 +297,19 @@
   [user price-ids & [force-refresh subscription-cache-time]]
   (p/let [customer-id (get-customer-id user)
           prices (when customer-id (cached-prices price-ids))
+          default-cache-time (* 1000 60 60)
           payments (get-cached-payments
                      customer-id prices
                      (or subscription-cache-time
-                         (* 1000 60 60)) force-refresh)]
+                         default-cache-time) force-refresh)
+          customer (get-cached-customer
+                     customer-id (or subscription-cache-time
+                                     default-cache-time)
+                     force-refresh)]
     (-> user
-        (j/assoc-in! [:stripe :payments] payments)
+        (j/update-in! [:stripe] j/assoc!
+                      :payments payments
+                      :customer customer)
         save-user)))
 
 (defn make-middleware:user-subscription
