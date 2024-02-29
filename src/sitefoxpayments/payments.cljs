@@ -162,7 +162,7 @@
         (if price
           (initiate-payment req res price
                             (or next-url success-url)
-                            cancel-url metadata)
+                            (or next-url cancel-url) metadata)
           (.redirect res 303 (build-absolute-uri req (or cancel-url "/")))))
       done)))
 
