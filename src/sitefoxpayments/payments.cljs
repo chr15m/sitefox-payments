@@ -330,7 +330,11 @@
         (j/assoc-in! req [:stripe :payments]
                      (j/get-in user [:stripe :payments]))
         (if force-refresh-subscription
-          (.redirect res (j/get req :path))
+          (.redirect res
+                     (-> (j/get req :originalUrl)
+                         (.replace "?refresh=1&" "?")
+                         (.replace "&refresh=1" "")
+                         (.replace "?refresh=1" "")))
           (done)))
       done)))
 
